@@ -1486,29 +1486,31 @@ class Neo4JStorage(BaseGraphStorage):
             target_node_id: The ID of the target node
             edge_data: A dictionary of edge properties
         """
-        # Extract data from edge_data with sensible defaults
-        weight = edge_data.get("weight", 0.2)
-        description = edge_data.get("description", "")
-        source_id = edge_data.get("source_id", "")
-        file_path = edge_data.get("file_path", "")
-        keywords = edge_data.get("keywords", "")
-        rel_type = edge_data.get("rel_type", "related")
-        created_at = edge_data.get("created_at", int(time.time()))
+        # edge_data comes from _merge_edges_then_upsert and should contain:
+        # "original_type", "rel_type" (human-readable std), "neo4j_type" (Neo4j label)
+        # "weight", "description", "keywords" (list of strings), "source_id" (string), "file_path" (string)
+
+        rel_type_param_for_detailed = edge_data.get("rel_type", "related") # Human-readable std
+        weight_param_for_detailed = float(edge_data.get("weight", 0.5))
+        desc_param_for_detailed = edge_data.get("description", "")
+        keywords_param_for_detailed = edge_data.get("keywords", []) # Should be list of str
         
-        # Call the detailed upsert_edge method
-        return await self.upsert_edge_detailed(
+        # Ensure keywords is a list of strings
+        if isinstance(keywords_param_for_detailed, str):
+            keywords_param_for_detailed = [kw.strip() for kw in keywords_param_for_detailed.split(',') if kw.strip()]
+        elif not isinstance(keywords_param_for_detailed, list):
+            keywords_param_for_detailed = [str(keywords_param_for_detailed)]
+
+        await self.upsert_edge_detailed(
             source_id=source_node_id,
             target_id=target_node_id,
-            rel_type=rel_type,
-            weight=weight,
-            merge_strategy="max",
-            properties={
-                "source_id": source_id,
-                "file_path": file_path,
-                "created_at": created_at,
-            },
-            description=description,
-            keywords=[keywords] if keywords else [],
+            rel_type=rel_type_param_for_detailed, # Pass human-readable std type
+            weight=weight_param_for_detailed,
+            properties=edge_data.copy(), # Pass the whole merged dict
+            description=desc_param_for_detailed,
+            keywords=keywords_param_for_detailed,
+            source_ids=edge_data.get("source_id"), # These are strings from merge step
+            file_paths=edge_data.get("file_path")  # These are strings from merge step
         )
 
     async def upsert_edge_detailed(
@@ -1559,46 +1561,98 @@ class Neo4JStorage(BaseGraphStorage):
             """
             await session.run(target_check_query, entity_id=target_id)
         
-        # Normalize properties
+        # Normalize properties input
         if properties is None:
             properties = {}
             
-        edge_properties = {}
-        
-        # Add metadata properties
+        # Start with a fresh dictionary for properties to be stored in Neo4j
+        final_properties_for_db = {}
+
+        # 1. Handle direct parameters first and store them stringified if necessary
         if description:
-            edge_properties["description"] = description
-            
-        if source_ids:
-            if isinstance(source_ids, str):
-                edge_properties["source_id"] = source_ids
-            else:
-                edge_properties["source_id"] = ";".join(source_ids)
-                
-        if file_paths:
-            if isinstance(file_paths, str):
-                edge_properties["file_path"] = file_paths
-            else:
-                edge_properties["file_path"] = ";".join(file_paths)
-                
-        if keywords:
-            edge_properties["keywords"] = ";".join(keywords) if isinstance(keywords, list) else keywords
-            
-        # Store the relationship type as a property for easier querying
-        edge_properties["rel_type"] = rel_type
-            
-        # Add custom properties
-        edge_properties.update(properties)
+            final_properties_for_db["description"] = description
         
-        # Process weight with threshold manager
-        edge_properties["weight"] = process_relationship_weight(
-            weight, 
-            relationship_type=rel_type,
+        # Ensure keywords is a list of strings, then join to a string for DB
+        if keywords: # keywords is a list of strings from the calling function
+            if isinstance(keywords, list) and all(isinstance(kw, str) for kw in keywords):
+                final_properties_for_db["keywords"] = ";".join(keywords) # Join list into a string
+            elif isinstance(keywords, str): # If it's already a string, use it
+                final_properties_for_db["keywords"] = keywords
+            else:
+                utils.logger.warning(f"Keywords for {source_id}->{target_id} are not a list of strings or a string: {keywords}. Storing as string.")
+                final_properties_for_db["keywords"] = str(keywords) 
+        
+        if source_ids:
+            final_properties_for_db["source_id"] = ";".join(source_ids) if isinstance(source_ids, list) else str(source_ids)
+        
+        if file_paths:
+            final_properties_for_db["file_path"] = ";".join(file_paths) if isinstance(file_paths, list) else str(file_paths)
+
+        # 2. Add custom/additional properties, ensuring they don't overwrite the critical ones handled above
+        # unless explicitly intended (e.g. if 'properties' dict has 'description', it will overwrite)
+        if properties: # 'properties' is the dict passed as a parameter to upsert_edge_detailed
+            for key, value in properties.items():
+                if key not in ["description", "keywords", "source_id", "file_path", "weight", "rel_type", "original_type", "neo4j_type"]:
+                    final_properties_for_db[key] = value # Add other custom properties
+                elif key not in final_properties_for_db: # Only add if not set by direct params
+                    final_properties_for_db[key] = value
+
+        # 3. Handle relationship type fields consistently
+        # rel_type parameter should be the human-readable standardized type or LLM raw if advanced_operate not used
+        original_type_from_param = rel_type # This is the input 'rel_type' to this function
+
+        # **CRITICAL FIX**: Prefer neo4j_type from input 'properties' if available (set by advanced_operate)
+        # The properties dict comes from _merge_edges_then_upsert which preserves the type information
+        neo4j_label_to_use = properties.get("neo4j_type") if properties else None
+        
+        if not neo4j_label_to_use or neo4j_label_to_use == "RELATED":
+            # Only fall back to registry if no specific type was provided
+            utils.logger.warning(f"neo4j_type missing or generic in input properties for edge {source_id}->{target_id} using rel_type='{original_type_from_param}'. Standardizing with registry.")
+            neo4j_label_to_use = self.rel_registry.get_neo4j_type(original_type_from_param)
+        else:
+            # We have a specific neo4j_type from advanced processing - use it directly
+            utils.logger.debug(f"Using neo4j_type '{neo4j_label_to_use}' from properties for edge {source_id}->{target_id}")
+        
+        # Validate and sanitize the Neo4j label
+        if not neo4j_label_to_use or not isinstance(neo4j_label_to_use, str):
+            utils.logger.error(f"Invalid Neo4j relationship type '{neo4j_label_to_use}' for {source_id}->{target_id} (from original '{original_type_from_param}'). Defaulting to RELATED_ERROR.")
+            neo4j_label_to_use = "RELATED_ERROR" # Use a distinct error type
+        elif not re.match(r"^[A-Z0-9_]+$", neo4j_label_to_use):
+            # If it doesn't match Neo4j format, try to fix it instead of throwing error
+            utils.logger.warning(f"Neo4j relationship type '{neo4j_label_to_use}' has invalid format. Attempting to fix.")
+            # Convert to proper Neo4j format
+            neo4j_label_to_use = re.sub(r'[^A-Z0-9_]', '_', neo4j_label_to_use.upper())
+            if not neo4j_label_to_use:
+                neo4j_label_to_use = "RELATED_ERROR"
+            utils.logger.info(f"Fixed Neo4j relationship type to '{neo4j_label_to_use}' for edge {source_id}->{target_id}")
+
+        final_properties_for_db["neo4j_type"] = neo4j_label_to_use
+        final_properties_for_db["original_type"] = properties.get("original_type", original_type_from_param) if properties else original_type_from_param
+        final_properties_for_db["rel_type"] = properties.get("rel_type", self.rel_registry.get_relationship_metadata(original_type_from_param).get("neo4j_type", "RELATED").lower().replace('_',' ')) if properties else original_type_from_param
+
+        # 4. Handle weight (ensure it's float)
+        # 'weight' param is the initial weight, properties might contain an override
+        final_weight = properties.get("weight", weight) # Prioritize weight from properties if it exists
+        try:
+            final_weight_float = float(final_weight)
+        except (ValueError, TypeError):
+            utils.logger.warning(f"Invalid weight '{final_weight}' for edge {source_id}->{target_id}. Defaulting to 0.5.")
+            final_weight_float = 0.5
+        
+        final_properties_for_db["weight"] = process_relationship_weight(
+            final_weight_float, 
+            relationship_type=final_properties_for_db["rel_type"], # Use human-readable std type
             threshold_manager=self.threshold_manager
         )
+        if not isinstance(final_properties_for_db["weight"], float): # Final check
+            utils.logger.error(f"Weight for {source_id}->{target_id} not float after processing: {final_properties_for_db['weight']}. Defaulting to 0.2.")
+            final_properties_for_db["weight"] = 0.2
+
+        # Log what's being sent to Neo4j
+        utils.logger.info(f"Neo4j Upsert: {source_id}-[{neo4j_label_to_use}]->{target_id} with properties: {final_properties_for_db}")
         
         # Validate edge data before database operation
-        validation_result = DatabaseValidator.validate_edge_data(edge_properties)
+        validation_result = DatabaseValidator.validate_edge_data(final_properties_for_db)
         if validation_result.has_errors():
             error_messages = [e.message for e in validation_result.errors]
             utils.logger.error(f"Edge validation failed for '{source_id}' -> '{target_id}': {error_messages}")
@@ -1609,27 +1663,24 @@ class Neo4JStorage(BaseGraphStorage):
             warning_messages = [w.message for w in validation_result.warnings]
             utils.logger.warning(f"Edge validation warnings for '{source_id}' -> '{target_id}': {warning_messages}")
             log_validation_errors(validation_result.warnings, f"upsert_edge({source_id}->{target_id})")
-        
-        # Sanitize relationship type for Neo4j (convert to uppercase and remove spaces/special chars)
-        neo4j_rel_type = rel_type.upper().replace(' ', '_').replace('-', '_')
-        
-        # Create Cypher query for upserting edge - Use the actual relationship type
+
+        # Create Cypher query for upserting edge - Use the standardized relationship type
         query = f"""
         MATCH (src:base {{entity_id: $source_id}}), (tgt:base {{entity_id: $target_id}})
-        MERGE (src)-[r:{neo4j_rel_type}]->(tgt)
-        ON CREATE SET r += $properties
-        ON MATCH SET r += $properties
+        MERGE (src)-[r:{neo4j_label_to_use}]->(tgt)
+        ON CREATE SET r = $properties_for_db 
+        ON MATCH SET r += $properties_for_db 
         RETURN r
         """
         
         try:
             async with self._driver.session(database=self._DATABASE) as session:
-                utils.logger.debug(f"Executing Cypher query in upsert_edge (main upsert): {query} with params: {{'source_id': '{source_id}', 'target_id': '{target_id}', 'properties': {edge_properties}}}")
+                utils.logger.debug(f"Executing Cypher query in upsert_edge (main upsert): {query} with params: {{'source_id': '{source_id}', 'target_id': '{target_id}', 'properties_for_db': {final_properties_for_db}}}")
                 result = await session.run(
                     query,
                     source_id=source_id,
                     target_id=target_id,
-                    properties=edge_properties
+                    properties_for_db=final_properties_for_db # Pass the cleaned properties
                 )
                 record = await result.single()
                 await result.consume()
@@ -1969,6 +2020,16 @@ class Neo4JStorage(BaseGraphStorage):
                                 
                                 # Convert Neo4j relationship to KnowledgeGraphEdge
                                 rel_dict = dict(rel)
+                                
+                                # Ensure numeric edge weight (PRD 4.2.2)
+                                edge_weight = 1.0 # Default if not found or invalid
+                                try:
+                                    raw_weight = rel_dict.get("weight")
+                                    if raw_weight is not None:
+                                        edge_weight = float(raw_weight)
+                                except (ValueError, TypeError):
+                                    utils.logger.warning(f"Edge {source_id}->{target_id} has invalid DB weight '{raw_weight}'. Defaulting to 1.0.")
+                                
                                 result.edges.append(KnowledgeGraphEdge(
                                     source=source_id,
                                     target=target_id,
@@ -1976,7 +2037,7 @@ class Neo4JStorage(BaseGraphStorage):
                                     type=rel_type,
                                     properties={
                                         "relationship_type": rel_type,
-                                        "weight": float(rel_dict.get("weight", 1.0)),
+                                        "weight": edge_weight,        # Ensures float
                                         "description": rel_dict.get("description", f"Relationship between {source_id} and {target_id}"),
                                         **{k: v for k, v in rel_dict.items() 
                                           if k not in ["weight", "description"]}
@@ -2225,6 +2286,15 @@ class Neo4JStorage(BaseGraphStorage):
                             if edge_key not in seen_edges and rel_source and rel_target:
                                 seen_edges.add(edge_key)
                                 
+                                # Ensure numeric edge weight (PRD 4.2.2)
+                                edge_weight = 1.0 # Default if not found or invalid
+                                try:
+                                    raw_weight = props.get("weight")
+                                    if raw_weight is not None:
+                                        edge_weight = float(raw_weight)
+                                except (ValueError, TypeError):
+                                    utils.logger.warning(f"Edge {rel_source}->{rel_target} has invalid DB weight '{raw_weight}'. Defaulting to 1.0.")
+                                
                                 result.edges.append(KnowledgeGraphEdge(
                                     source=rel_source,
                                     target=rel_target,
@@ -2232,7 +2302,7 @@ class Neo4JStorage(BaseGraphStorage):
                                     type=rel_type,
                                     properties={
                                         "relationship_type": rel_type,
-                                        "weight": float(props.get("weight", 1.0)),
+                                        "weight": edge_weight,        # Ensures float
                                         "description": props.get("description", f"Relationship between {rel_source} and {rel_target}"),
                                         **{k: v for k, v in props.items() 
                                           if k not in ["weight", "description"]}
@@ -2352,6 +2422,16 @@ class Neo4JStorage(BaseGraphStorage):
                                 
                                 if source_id and target_id:
                                     rel_dict = dict(value)
+                                    
+                                    # Ensure numeric edge weight (PRD 4.2.2)
+                                    edge_weight = 1.0 # Default if not found or invalid
+                                    try:
+                                        raw_weight = rel_dict.get("weight")
+                                        if raw_weight is not None:
+                                            edge_weight = float(raw_weight)
+                                    except (ValueError, TypeError):
+                                        utils.logger.warning(f"Edge {source_id}->{target_id} has invalid DB weight '{raw_weight}'. Defaulting to 1.0.")
+                                    
                                     result.edges.append(KnowledgeGraphEdge(
                                         source=source_id,
                                         target=target_id,
@@ -2359,7 +2439,7 @@ class Neo4JStorage(BaseGraphStorage):
                                         type=rel_type,
                                         properties={
                                             "relationship_type": rel_type,
-                                            "weight": float(rel_dict.get("weight", 1.0)),
+                                            "weight": edge_weight,        # Ensures float
                                             "description": rel_dict.get("description", f"Relationship between {source_id} and {target_id}"),
                                             **{k: v for k, v in rel_dict.items() 
                                               if k not in ["weight", "description"]}

@@ -255,44 +255,58 @@ async def _handle_single_relationship_extraction(
     chunk_key: str,
     file_path: str = "unknown_source",
 ):
-    if len(record_attributes) < 5 or '"relationship"' not in record_attributes[0]:
-        return None
-    # add this record as edge
-    source = clean_str(record_attributes[1])
-    target = clean_str(record_attributes[2])
-
-    # Normalize source and target entity names
-    source = normalize_extracted_info(source, is_entity=True)
-    target = normalize_extracted_info(target, is_entity=True)
-    if source == target:
-        logger.debug(
-            f"Relationship source and target are the same in: {record_attributes}"
-        )
-        return None
-
-    edge_description = clean_str(record_attributes[3])
-    edge_description = normalize_extracted_info(edge_description)
-
-    edge_keywords = normalize_extracted_info(
-        clean_str(record_attributes[4]), is_entity=True
-    )
-    edge_keywords = edge_keywords.replace("，", ",")
-
-    edge_source_id = chunk_key
-    weight = (
-        float(record_attributes[-1].strip('"').strip("'"))
-        if is_float_regex(record_attributes[-1].strip('"').strip("'"))
-        else 1.0
-    )
+    logger.debug(f"Attempting to parse relationship record: {record_attributes} from chunk {chunk_key}")
     
-    # Create relationship data structure
+    # Check if this is a content_keywords record (expected and should be ignored)
+    if len(record_attributes) >= 1 and '"content_keywords"' in record_attributes[0]:
+        logger.debug(f"Skipping content_keywords record: {record_attributes[0] if len(record_attributes) > 0 else 'empty'}")
+        return None
+    
+    if len(record_attributes) != 7 or '"relationship"' not in record_attributes[0]: # Strict check for 7 elements
+        # Only log as error if it's not a known content_keywords record
+        if len(record_attributes) >= 1 and '"content_keywords"' not in record_attributes[0]:
+            logger.warning(f"Malformed relationship record (expected 7 attributes, got {len(record_attributes)}): {record_attributes} from chunk {chunk_key}")
+        return None
+
+    source = normalize_extracted_info(clean_str(record_attributes[1]), is_entity=True)
+    target = normalize_extracted_info(clean_str(record_attributes[2]), is_entity=True)
+
+    if not source or not target:
+        logger.warning(f"Missing source or target for relationship in chunk {chunk_key}: src='{source}', tgt='{target}'")
+        return None
+    if source == target:
+        logger.debug(f"Self-loop relationship skipped for {source} in chunk {chunk_key}")
+        return None
+
+    edge_description = normalize_extracted_info(clean_str(record_attributes[3]))
+    raw_rel_type = clean_str(record_attributes[4]) # Actual relationship type from LLM
+    edge_keywords = normalize_extracted_info(clean_str(record_attributes[5]), is_entity=False) # Actual keywords
+    edge_keywords = edge_keywords.replace("，", ",") # Normalize Chinese comma
+
+    raw_strength_str = record_attributes[6].strip('"').strip("'")
+    weight = 0.5  # Default weight
+    try:
+        extracted_weight = float(raw_strength_str)
+        if 0.0 <= extracted_weight <= 1.0: # LLM asked for 0-1
+            weight = extracted_weight
+        elif 0.0 <= extracted_weight <= 10.0: # LLM might give 0-10
+            weight = extracted_weight / 10.0
+            logger.debug(f"Normalized relationship strength {raw_strength_str} to {weight} for {source}-{target}")
+        else:
+            logger.warning(f"Relationship strength '{raw_strength_str}' for {source}-{target} is out of 0.0-10.0 range. Defaulting to {weight}.")
+    except ValueError:
+        logger.warning(f"Invalid relationship strength '{raw_strength_str}' for {source}-{target}. Defaulting to {weight}.")
+    
+    logger.info(f"Parsed relationship from chunk {chunk_key}: {source} -[{raw_rel_type}({weight})]-> {target}, Keywords: '{edge_keywords}'")
+
     relationship_data = dict(
         src_id=source,
         tgt_id=target,
         weight=weight,
         description=edge_description,
+        relationship_type=raw_rel_type, # This is the raw type from LLM
         keywords=edge_keywords,
-        source_id=edge_source_id,
+        source_id=chunk_key,
         file_path=file_path,
     )
     
@@ -503,197 +517,184 @@ async def _merge_nodes_then_upsert(
 async def _merge_edges_then_upsert(
     src_id: str,
     tgt_id: str,
-    edges_data: list[dict],
+    edges: list[dict], # List of edge dicts from extract_entities_with_types
     knowledge_graph_inst: BaseGraphStorage,
-    global_config: dict,
+    global_config: dict[str, Any],
     pipeline_status: dict = None,
     pipeline_status_lock=None,
     llm_response_cache: BaseKVStorage | None = None,
-):
-    # Initialize monitoring
-    perf_monitor = get_performance_monitor()
-    proc_monitor = get_processing_monitor()
-    enhanced_logger = get_enhanced_logger("lightrag.edge_merge")
+) -> dict | None:
+    """
+    Merge and upsert a single edge relationship between two entities.
     
-    with perf_monitor.measure("merge_edges_upsert", src_id=src_id, tgt_id=tgt_id, edges_count=len(edges_data)):
-        enhanced_logger.debug(f"Merging {len(edges_data)} edges for relationship: {src_id} -> {tgt_id}")
+    Args:
+        src_id: Source entity ID
+        tgt_id: Target entity ID
+        edges: List of edge data dictionaries to merge
+        knowledge_graph_inst: Knowledge graph storage instance
+        global_config: Global configuration dictionary
+        pipeline_status: Pipeline status dictionary
+        pipeline_status_lock: Lock for pipeline status
+        llm_response_cache: LLM response cache
         
-        if src_id == tgt_id:
-            return None
+    Returns:
+        Merged edge data dictionary or None if merge fails
+    """
+    if not edges:
+        logger.warning(f"No edges provided to merge for {src_id} -> {tgt_id}")
+        return None
+        
+    logger.debug(f"Merging {len(edges)} edge instances for {src_id} -> {tgt_id}")
 
-        already_weights = []
-        already_source_ids = []
-        already_description = []
-        already_keywords = []
-        already_file_paths = []
+    # Initialize merged_edge with defaults that clearly indicate no specific type yet.
+    # We will iterate through all edges to find the best type.
+    merged_edge = {
+        "src_id": src_id,
+        "tgt_id": tgt_id,
+        "weight": 0.0,
+        "description": "",
+        "keywords": [], 
+        "source_id": [], 
+        "file_path": [], 
+        "relationship_type": "related", # Default human-readable std
+        "original_type": "related",     # Default LLM raw
+        "neo4j_type": "RELATED",        # Default Neo4j label
+        "created_at": int(time.time())
+    }
+    
+    # Iterate through all edge instances to merge their properties
+    all_original_types = []
+    all_neo4j_types = []
 
-        if await knowledge_graph_inst.has_edge(src_id, tgt_id):
-            already_edge = await knowledge_graph_inst.get_edge(src_id, tgt_id)
-            # Handle the case where get_edge returns None or missing fields
-            if already_edge:
-                # Get weight with default 0.0 if missing
-                already_weights.append(already_edge.get("weight", 0.0))
+    for i, edge_instance in enumerate(edges):
+        logger.debug(f"Processing instance {i+1}/{len(edges)} for merge {src_id}->{tgt_id}: "
+                     f"original_type='{edge_instance.get('original_type')}', "
+                     f"rel_type='{edge_instance.get('relationship_type')}', " # This is human-readable-std from advanced_operate
+                     f"neo4j_type='{edge_instance.get('neo4j_type')}'")
 
-                # Get source_id with empty string default if missing or None
-                if already_edge.get("source_id") is not None:
-                    already_source_ids.extend(
-                        split_string_by_multi_markers(
-                            already_edge["source_id"], [GRAPH_FIELD_SEP]
-                        )
-                    )
+        merged_edge["weight"] += float(edge_instance.get("weight", 0.5))
 
-                # Get file_path with empty string default if missing or None
-                if already_edge.get("file_path") is not None:
-                    already_file_paths.extend(
-                        split_string_by_multi_markers(
-                            already_edge["file_path"], [GRAPH_FIELD_SEP]
-                        )
-                    )
-
-                # Get description with empty string default if missing or None
-                if already_edge.get("description") is not None:
-                    already_description.append(already_edge["description"])
-
-                # Get keywords with empty string default if missing or None
-                if already_edge.get("keywords") is not None:
-                    already_keywords.extend(
-                        split_string_by_multi_markers(
-                            already_edge["keywords"], [GRAPH_FIELD_SEP]
-                        )
-                    )
-
-        # Process edges_data with None checks
-        weight = sum([dp["weight"] for dp in edges_data] + already_weights)
-        description = GRAPH_FIELD_SEP.join(
-            sorted(
-                set(
-                    [dp["description"] for dp in edges_data if dp.get("description")]
-                    + already_description
-                )
-            )
-        )
-
-        # Split all existing and new keywords into individual terms, then combine and deduplicate
-        all_keywords = set()
-        # Process already_keywords (which are comma-separated)
-        for keyword_str in already_keywords:
-            if keyword_str:  # Skip empty strings
-                all_keywords.update(k.strip() for k in keyword_str.split(",") if k.strip())
-        # Process new keywords from edges_data
-        for edge in edges_data:
-            if edge.get("keywords"):
-                all_keywords.update(
-                    k.strip() for k in edge["keywords"].split(",") if k.strip()
-                )
-        # Join all unique keywords with commas
-        keywords = ",".join(sorted(all_keywords))
-
-        source_id = GRAPH_FIELD_SEP.join(
-            set(
-                [dp["source_id"] for dp in edges_data if dp.get("source_id")]
-                + already_source_ids
-            )
-        )
-        file_path = GRAPH_FIELD_SEP.join(
-            set(
-                [dp["file_path"] for dp in edges_data if dp.get("file_path")]
-                + already_file_paths
-            )
-        )
-
-        for need_insert_id in [src_id, tgt_id]:
-            # Check if node already exists to avoid overwriting entity_type
-            existing_node = await knowledge_graph_inst.get_node(need_insert_id)
-            if existing_node is None:
-                # Only create node if it doesn't exist
-                await knowledge_graph_inst.upsert_node(
-                    need_insert_id,
-                    node_data={
-                        "entity_id": need_insert_id,
-                        "source_id": source_id,
-                        "description": description,
-                        "entity_type": "UNKNOWN",
-                        "file_path": file_path,
-                        "created_at": int(time.time()),
-                    },
-                )
-
-        force_llm_summary_on_merge = global_config["force_llm_summary_on_merge"]
-
-        num_fragment = description.count(GRAPH_FIELD_SEP) + 1
-        num_new_fragment = len(
-            set([dp["description"] for dp in edges_data if dp.get("description")])
-        )
-
-        if num_fragment > 1:
-            if num_fragment >= force_llm_summary_on_merge:
-                status_message = f"LLM merge E: {src_id} - {tgt_id} | {num_new_fragment}+{num_fragment-num_new_fragment}"
-                logger.info(status_message)
-                if pipeline_status is not None and pipeline_status_lock is not None:
-                    async with pipeline_status_lock:
-                        pipeline_status["latest_message"] = status_message
-                        pipeline_status["history_messages"].append(status_message)
-                description = await _handle_entity_relation_summary(
-                    f"({src_id}, {tgt_id})",
-                    description,
-                    global_config,
-                    pipeline_status,
-                    pipeline_status_lock,
-                    llm_response_cache,
-                )
+        if edge_instance.get("description"):
+            if merged_edge["description"]:
+                merged_edge["description"] += f"{GRAPH_FIELD_SEP}{edge_instance['description']}"
             else:
-                status_message = f"Merge E: {src_id} - {tgt_id} | {num_new_fragment}+{num_fragment-num_new_fragment}"
-                logger.info(status_message)
-                if pipeline_status is not None and pipeline_status_lock is not None:
-                    async with pipeline_status_lock:
-                        pipeline_status["latest_message"] = status_message
-                        pipeline_status["history_messages"].append(status_message)
+                merged_edge["description"] = edge_instance["description"]
+        
+        # Keywords merging (ensure this is robust)
+        new_keywords = edge_instance.get("keywords", [])
+        current_keywords_list = merged_edge.get("keywords", [])
+        if not isinstance(current_keywords_list, list): 
+            current_keywords_list = [str(current_keywords_list)] if current_keywords_list else []
+        
+        if isinstance(new_keywords, str): 
+            new_keywords = [kw.strip() for kw in new_keywords.split(',') if kw.strip()]
+        elif not isinstance(new_keywords, list): 
+            new_keywords = [str(new_keywords).strip()] if new_keywords else []
+        
+        temp_new_keywords_list = []
+        for item_kw in new_keywords:
+            if isinstance(item_kw, str): 
+                temp_new_keywords_list.append(item_kw.strip())
+            elif isinstance(item_kw, list): # Should not happen if advanced_operate is correct
+                for sub_item_kw in item_kw: 
+                    temp_new_keywords_list.append(str(sub_item_kw).strip())
+            else: 
+                temp_new_keywords_list.append(str(item_kw).strip())
+        current_keywords_list.extend(filter(None, temp_new_keywords_list))
+        merged_edge["keywords"] = current_keywords_list
 
-        # Create edge data structure for database upsert
-        edge_data_for_db = dict(
-            weight=weight,
-            description=description,
-            keywords=keywords,
-            source_id=source_id,
-            file_path=file_path,
-            created_at=int(time.time()),
-        )
-        
-        # Validate edge data before database upsert
-        db_validation_result = DatabaseValidator.validate_edge_data(edge_data_for_db)
-        if db_validation_result.has_errors():
-            logger.error(f"Database validation failed for edge '{src_id}' -> '{tgt_id}': {[e.message for e in db_validation_result.errors]}")
-            return None  # Skip this edge rather than failing the entire process
-        
-        if db_validation_result.has_warnings():
-            logger.warning(f"Database validation warnings for edge '{src_id}' -> '{tgt_id}': {[w.message for w in db_validation_result.warnings]}")
+        # source_id merging (robust source_id merging logic)
+        new_source_ids = edge_instance.get("source_id", [])
+        current_source_ids_list = merged_edge.get("source_id", [])
+        if not isinstance(current_source_ids_list, list): 
+            current_source_ids_list = [str(current_source_ids_list)] if current_source_ids_list else []
+        if isinstance(new_source_ids, str): 
+            new_source_ids = [sid.strip() for sid in new_source_ids.split(GRAPH_FIELD_SEP) if sid.strip()]
+        elif not isinstance(new_source_ids, list): 
+            new_source_ids = [str(new_source_ids).strip()] if new_source_ids else []
+        current_source_ids_list.extend(filter(None, new_source_ids))
+        merged_edge["source_id"] = current_source_ids_list
+
+        # file_path merging (robust file_path merging logic)
+        new_file_paths = edge_instance.get("file_path", [])
+        current_file_paths_list = merged_edge.get("file_path", [])
+        if not isinstance(current_file_paths_list, list): 
+            current_file_paths_list = [str(current_file_paths_list)] if current_file_paths_list else []
+        if isinstance(new_file_paths, str): 
+            new_file_paths = [fp.strip() for fp in new_file_paths.split(GRAPH_FIELD_SEP) if fp.strip()]
+        elif not isinstance(new_file_paths, list): 
+            new_file_paths = [str(new_file_paths).strip()] if new_file_paths else []
+        current_file_paths_list.extend(filter(None, new_file_paths))
+        merged_edge["file_path"] = current_file_paths_list
+
+        # Collect all types encountered for this merge group
+        if edge_instance.get("original_type"):
+            all_original_types.append(edge_instance["original_type"])
+        if edge_instance.get("neo4j_type"):
+            all_neo4j_types.append(edge_instance["neo4j_type"])
     
-        # Monitor database upsert operation  
-        with perf_monitor.measure("database_upsert_edge", src_id=src_id, tgt_id=tgt_id):
-            try:
-                await knowledge_graph_inst.upsert_edge(
-                    src_id,
-                    tgt_id,
-                    edge_data_for_db,
-                )
-                proc_monitor.record_database_operation(success=True)
-                enhanced_logger.debug(f"Successfully upserted edge: {src_id} -> {tgt_id}")
-            except Exception as e:
-                proc_monitor.record_database_operation(success=False)
-                enhanced_logger.error(f"Failed to upsert edge {src_id} -> {tgt_id}: {str(e)}")
-                raise
+    # Finalize list fields
+    merged_edge["keywords"] = list(set(merged_edge["keywords"])) # Deduplicate
+    merged_edge["source_id"] = GRAPH_FIELD_SEP.join(list(set(merged_edge["source_id"])))
+    merged_edge["file_path"] = GRAPH_FIELD_SEP.join(list(set(merged_edge["file_path"])))
 
-        edge_data = dict(
-            src_id=src_id,
-            tgt_id=tgt_id,
-            description=description,
-            keywords=keywords,
-            source_id=source_id,
-            file_path=file_path,
-            created_at=int(time.time()),
+    # Determine the best type information after iterating all instances
+    # Prioritize non-generic, non-None types.
+    # If multiple specific types exist, this logic might need further refinement (e.g., most frequent, or manual resolution flag)
+    final_original_type = "related"
+    final_neo4j_type = "RELATED"
+    
+    # Find a specific original_type if one exists
+    specific_original_types = [ot for ot in all_original_types if ot and ot.lower() != "related"]
+    if specific_original_types:
+        final_original_type = specific_original_types[0] # Take the first specific one encountered
+        logger.debug(f"For {src_id}->{tgt_id}, selected specific original_type: '{final_original_type}' from {specific_original_types}")
+    
+    # Find a specific neo4j_type if one exists
+    specific_neo4j_types = [nt for nt in all_neo4j_types if nt and nt != "RELATED"]
+    if specific_neo4j_types:
+        final_neo4j_type = specific_neo4j_types[0] # Take the first specific one
+        logger.debug(f"For {src_id}->{tgt_id}, selected specific neo4j_type: '{final_neo4j_type}' from {specific_neo4j_types}")
+    elif final_original_type != "related": # If no specific neo4j_type, but specific original_type, standardize original
+        # This assumes advanced_operate's simple_neo4j_standardize is available or similar logic
+        final_neo4j_type = final_original_type.upper().replace(' ', '_').replace('-', '_')
+        final_neo4j_type = re.sub(r'[^A-Z0-9_]', '_', final_neo4j_type) # Basic sanitization
+        if not final_neo4j_type: 
+            final_neo4j_type = "RELATED"
+        logger.debug(f"For {src_id}->{tgt_id}, derived neo4j_type '{final_neo4j_type}' from original_type '{final_original_type}'")
+
+    merged_edge["original_type"] = final_original_type
+    merged_edge["neo4j_type"] = final_neo4j_type
+    merged_edge["relationship_type"] = final_neo4j_type.lower().replace('_', ' ') # Human-readable from final Neo4j type
+    merged_edge["rel_type"] = merged_edge["relationship_type"] # Ensure consistency
+
+    # Description summarization logic
+    force_llm_summary_on_merge = global_config.get("force_llm_summary_on_merge", 6) 
+    num_fragment = merged_edge["description"].count(GRAPH_FIELD_SEP) + 1
+    if num_fragment > 1 and num_fragment >= force_llm_summary_on_merge:
+        merged_edge["description"] = await _handle_entity_relation_summary(
+             f"({src_id}, {tgt_id})", merged_edge["description"], global_config, 
+             pipeline_status, pipeline_status_lock, llm_response_cache
         )
+    
+    # Final log before passing to upsert_edge
+    logger.info(f"Final merged_edge for {src_id}->{tgt_id}: "
+                f"neo4j_type='{merged_edge['neo4j_type']}', "
+                f"rel_type='{merged_edge['rel_type']}', "
+                f"original_type='{merged_edge['original_type']}', "
+                f"weight={merged_edge['weight']:.2f}")
 
-        return edge_data
+    try:
+        # Pass the fully populated merged_edge dictionary to upsert_edge
+        await knowledge_graph_inst.upsert_edge(src_id, tgt_id, merged_edge)
+        logger.debug(f"Successfully upserted edge: {src_id} -> {tgt_id}")
+        
+        # Return the merged edge data for vector database updates
+        return merged_edge
+        
+    except Exception as e:
+        logger.error(f"Failed to upsert edge {src_id} -> {tgt_id}: {str(e)}")
+        return None
 
 
 async def merge_nodes_and_edges(
@@ -931,6 +932,11 @@ async def extract_entities(
                     record_attributes = split_string_by_multi_markers(
                         record, [context_base["tuple_delimiter"]]
                     )
+
+                    # Skip content_keywords records entirely
+                    if len(record_attributes) >= 1 and '"content_keywords"' in record_attributes[0]:
+                        logger.debug(f"Skipping content_keywords record: {record_attributes[0] if len(record_attributes) > 0 else 'empty'}")
+                        continue
 
                     if_entities = await _handle_single_entity_extraction(
                         record_attributes, chunk_key, file_path

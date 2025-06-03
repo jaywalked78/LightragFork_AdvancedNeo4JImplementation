@@ -49,12 +49,12 @@ For each pair of related entities, extract the following information:
 
 Format each relationship as ("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_type>{tuple_delimiter}<relationship_keywords>{tuple_delimiter}<relationship_strength>)
 
-3. Identify high-level key words that summarize the main concepts, themes, or topics of the entire text. These should capture the overarching ideas present in the document.
-Format the content-level key words as ("content_keywords"{tuple_delimiter}<high_level_keywords>)
+3. Return output in {language} as a single list of all the entities and relationships identified in steps 1 and 2. Use **{record_delimiter}** as the list delimiter.
 
-4. Return output in {language} as a single list of all the entities and relationships identified in steps 1 and 2. Use **{record_delimiter}** as the list delimiter.
+4. When finished, output {completion_delimiter}
 
-5. When finished, output {completion_delimiter}
+---Note on Output Format---
+IMPORTANT: Only output entities and relationships in the format specified above. Do not include content summaries, keywords, or any other types of records in your output.
 
 ---Note on Pre-existing Data---
 If the document contains pre-existing entities and relationships (e.g., from structured analysis), include them in your output while also identifying any additional entities and relationships not already captured.
@@ -72,7 +72,9 @@ Relationship_types: {relationship_types}
 Text:
 {input_text}
 ######################
-Output:"""
+Output:
+
+"""
 
 PROMPTS["entity_extraction_examples"] = [
     """Example 1:
@@ -99,9 +101,9 @@ Output:
 ("relationship"{tuple_delimiter}"Claude AI"{tuple_delimiter}"JavaScript"{tuple_delimiter}"Claude AI assists in debugging and refining JavaScript code for the workflow."{tuple_delimiter}"debugs"{tuple_delimiter}"code assistance, debugging"{tuple_delimiter}9){record_delimiter}
 ("relationship"{tuple_delimiter}"n8n Code Node"{tuple_delimiter}"JavaScript"{tuple_delimiter}"The n8n Code Node executes custom JavaScript code for data processing."{tuple_delimiter}"executes"{tuple_delimiter}"code execution, custom logic"{tuple_delimiter}10){record_delimiter}
 ("relationship"{tuple_delimiter}"n8n Code Node"{tuple_delimiter}"Data Transformation"{tuple_delimiter}"Code Nodes perform data transformation operations on API responses."{tuple_delimiter}"processes"{tuple_delimiter}"data processing, transformation"{tuple_delimiter}8){record_delimiter}
-("relationship"{tuple_delimiter}"Brave Search API"{tuple_delimiter}"JSON"{tuple_delimiter}"The API returns responses in JSON format that need to be parsed."{tuple_delimiter}"returns"{tuple_delimiter}"api response, data format"{tuple_delimiter}7){record_delimiter}
-("content_keywords"{tuple_delimiter}"workflow automation, API integration, debugging, data transformation, JavaScript development"){completion_delimiter}
-#############################""",
+("relationship"{tuple_delimiter}"Brave Search API"{tuple_delimiter}"JSON"{tuple_delimiter}"The API returns responses in JSON format that need to be parsed."{tuple_delimiter}"returns"{tuple_delimiter}"api response, data format"{tuple_delimiter}7){completion_delimiter}
+#############################
+""",
     """Example 2:
 
 Entity_types: [tool, technology, concept, artifact, workflow]
@@ -126,9 +128,9 @@ Output:
 ("relationship"{tuple_delimiter}"Claude AI"{tuple_delimiter}"setup-backup-cron.sh"{tuple_delimiter}"Claude AI generated the setup script for the backup system."{tuple_delimiter}"generates"{tuple_delimiter}"code generation, assistance"{tuple_delimiter}8){record_delimiter}
 ("relationship"{tuple_delimiter}"setup-backup-cron.sh"{tuple_delimiter}"NVM"{tuple_delimiter}"The setup script configures NVM environment for proper execution."{tuple_delimiter}"configures"{tuple_delimiter}"environment setup, configuration"{tuple_delimiter}7){record_delimiter}
 ("relationship"{tuple_delimiter}"NVM"{tuple_delimiter}"Node.js"{tuple_delimiter}"NVM manages the Node.js version required for n8n."{tuple_delimiter}"manages"{tuple_delimiter}"version management, runtime"{tuple_delimiter}8){record_delimiter}
-("relationship"{tuple_delimiter}"n8n workflows"{tuple_delimiter}"JSON files"{tuple_delimiter}"Workflows are exported and saved as timestamped JSON files."{tuple_delimiter}"exports to"{tuple_delimiter}"data export, backup"{tuple_delimiter}9){record_delimiter}
-("content_keywords"{tuple_delimiter}"backup automation, system administration, scripting, job scheduling, workflow preservation"){completion_delimiter}
-#############################""",
+("relationship"{tuple_delimiter}"n8n workflows"{tuple_delimiter}"JSON files"{tuple_delimiter}"Workflows are exported and saved as timestamped JSON files."{tuple_delimiter}"exports to"{tuple_delimiter}"data export, backup"{tuple_delimiter}9){completion_delimiter}
+#############################
+""",
     """Example 3:
 
 Entity_types: [tool, concept, technology, organization]
@@ -148,9 +150,9 @@ Output:
 ("relationship"{tuple_delimiter}"OpenAI"{tuple_delimiter}"Embeddings"{tuple_delimiter}"OpenAI provides the embedding models for text vectorization."{tuple_delimiter}"provides"{tuple_delimiter}"model provision, technology"{tuple_delimiter}9){record_delimiter}
 ("relationship"{tuple_delimiter}"RAG Pipeline"{tuple_delimiter}"Semantic Search"{tuple_delimiter}"The RAG pipeline incorporates semantic search for document retrieval."{tuple_delimiter}"incorporates"{tuple_delimiter}"pipeline component, search integration"{tuple_delimiter}9){record_delimiter}
 ("relationship"{tuple_delimiter}"Embeddings"{tuple_delimiter}"Neo4j"{tuple_delimiter}"Document embeddings are stored in Neo4j for retrieval."{tuple_delimiter}"stored in"{tuple_delimiter}"data storage, vectorization"{tuple_delimiter}8){record_delimiter}
-("relationship"{tuple_delimiter}"Neo4j"{tuple_delimiter}"Knowledge Graph"{tuple_delimiter}"Neo4j serves as the database for the knowledge graph implementation."{tuple_delimiter}"hosts"{tuple_delimiter}"graph storage, database"{tuple_delimiter}10){record_delimiter}
-("content_keywords"{tuple_delimiter}"semantic search, embeddings, knowledge graph, RAG, vectorization"){completion_delimiter}
-#############################""",
+("relationship"{tuple_delimiter}"Neo4j"{tuple_delimiter}"Knowledge Graph"{tuple_delimiter}"Neo4j serves as the database for the knowledge graph implementation."{tuple_delimiter}"hosts"{tuple_delimiter}"graph storage, database"{tuple_delimiter}10){completion_delimiter}
+#############################
+"""
 ]
 
 PROMPTS[
@@ -201,20 +203,19 @@ For each pair of related entities, extract the following information:
 - source_entity: name of the source entity, as identified in step 1
 - target_entity: name of the target entity, as identified in step 1
 - relationship_description: explanation as to why you think the source entity and the target entity are related to each other
+- relationship_type: Choose the most appropriate relationship type from the following list. If none fit exactly, choose "related":
+  {relationship_types}
 - relationship_strength: a numeric score indicating strength of the relationship between the source entity and target entity
 - relationship_keywords: one or more high-level key words that summarize the overarching nature of the relationship, focusing on concepts or themes rather than specific details
-Format each relationship as ("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_keywords>{tuple_delimiter}<relationship_strength>)
+Format each relationship as ("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_type>{tuple_delimiter}<relationship_keywords>{tuple_delimiter}<relationship_strength>)
 
-3. Identify high-level key words that summarize the main concepts, themes, or topics of the entire text. These should capture the overarching ideas present in the document.
-Format the content-level key words as ("content_keywords"{tuple_delimiter}<high_level_keywords>)
+3. Return output in {language} as a single list of all the entities and relationships identified in steps 1 and 2. Use **{record_delimiter}** as the list delimiter.
 
-4. Return output in {language} as a single list of all the entities and relationships identified in steps 1 and 2. Use **{record_delimiter}** as the list delimiter.
-
-5. When finished, output {completion_delimiter}
+4. When finished, output {completion_delimiter}
 
 ---Output---
 
-Add them below using the same format:\n
+Add them below using the same format:
 """.strip()
 
 PROMPTS["entity_if_loop_extraction"] = """

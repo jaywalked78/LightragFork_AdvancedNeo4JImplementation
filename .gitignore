@@ -8,11 +8,12 @@ __pycache__/
 *.ini
 
 # Virtual Environment
-.venv/
-env/
+TLL_RobustVenv/
 venv/
-*.env*
-.env_example
+env/
+ENV/
+.venv/
+.env/
 
 # Build / Distribution
 dist/
@@ -72,3 +73,123 @@ memory-bank/
 TLLLightragVenv/
 *.so
 *.pyc
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Neo4j database files
+*.db
+*.log
+data/
+logs/
+import/
+plugins/
+conf/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS generated files
+Thumbs.db
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Environment and config files (optional - be careful with secrets)
+.env
+.env.local
+.env.*.local
+
+# Test coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Large data files
+*.csv
+*.json
+*.pickle
+*.pkl
+*.parquet
+
+# Model files and embeddings
+*.bin
+*.safetensors
+models/
+embeddings/
+
+# Documentation build
+docs/_build/
+site/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# Poetry
+poetry.lock
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json

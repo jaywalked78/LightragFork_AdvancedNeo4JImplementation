@@ -352,6 +352,13 @@ class RelationshipValidator:
             else:
                 sanitized_data["weight"] = 1.0
             
+            # **CRITICAL FIX**: Preserve relationship type fields
+            # These are essential for maintaining LLM-extracted relationship semantics
+            type_fields = ["relationship_type", "original_type", "neo4j_type", "rel_type"]
+            for field in type_fields:
+                if field in relationship_data:
+                    sanitized_data[field] = str(relationship_data[field]) if relationship_data[field] is not None else None
+            
             # Copy other fields with sanitization
             for field in ["source_id", "file_path"]:
                 if field in relationship_data:

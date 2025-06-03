@@ -1345,59 +1345,72 @@ async def extract_entities_with_types(
     llm_response_cache: BaseKVStorage | None = None,
 ) -> list:
     """
-    Enhanced entity extraction that includes relationship type validation and uses
-    the relationship registry to guide LLM extraction.
+    Enhanced entity extraction that preserves LLM-extracted relationship types
+    with simple Neo4j formatting. This approach is universally applicable to any domain.
     """
-    # Initialize relationship registry
-    from lightrag.kg.utils.relationship_registry import RelationshipTypeRegistry
-    relationship_registry = RelationshipTypeRegistry()
+    import re
     
-    # Get valid relationship types for the prompt
-    valid_relationship_types = relationship_registry.get_all_relationship_types()
-    relationship_examples = relationship_registry.get_category_relationships("ai_ml")[:5] + \
-                           relationship_registry.get_category_relationships("api")[:5] + \
-                           relationship_registry.get_category_relationships("data")[:5]
+    def simple_neo4j_standardize(rel_type: str) -> str:
+        """
+        Convert LLM relationship type directly to Neo4j format without domain-specific validation.
+        This preserves the semantic intent while ensuring Neo4j compatibility.
+        
+        Args:
+            rel_type: Original relationship type from LLM
+            
+        Returns:
+            Neo4j-compatible relationship type
+        """
+        if not rel_type or not isinstance(rel_type, str):
+            return "RELATED"
+        
+        # Remove special characters, preserve alphanumeric and spaces
+        cleaned = re.sub(r'[^a-zA-Z0-9\s]', '', rel_type.strip())
+        
+        # Replace spaces with underscores and convert to uppercase
+        standardized = re.sub(r'\s+', '_', cleaned).upper()
+        
+        # Ensure it's not empty and not too long for Neo4j
+        if not standardized or len(standardized) == 0:
+            return "RELATED"
+        elif len(standardized) > 50:  # Neo4j identifier limit
+            standardized = standardized[:50]
+            
+        return standardized
     
-    # Enhance the global config with relationship context that the prompt template expects
-    enhanced_config = global_config.copy()
+    logger.info("Using simple Neo4j relationship formatting (universally applicable)")
     
-    # Add the template variables that the entity extraction prompt expects
-    enhanced_config["relationship_types"] = ", ".join(valid_relationship_types[:30])  # Limit to prevent prompt overflow
-    enhanced_config["relationship_examples"] = ", ".join(relationship_examples[:15])  # Limit examples
-    
-    # Ensure these are available for prompt formatting
-    if "valid_relationship_types" not in enhanced_config:
-        enhanced_config["valid_relationship_types"] = enhanced_config["relationship_types"]
-    
-    logger.debug(f"Enhanced config with {len(valid_relationship_types)} relationship types")
-    
-    # Get base extraction results with enhanced config
+    # Get base extraction results without domain-specific enhancement
     chunk_results = await base_extract_entities(
         chunks,
-        enhanced_config,
+        global_config,
         pipeline_status,
         pipeline_status_lock,
         llm_response_cache,
     )
     
-    # Post-process to standardize relationship types using the registry
+    # Post-process to standardize relationship types for Neo4j
     for maybe_nodes, maybe_edges in chunk_results:
-        # Process edges to validate and standardize relationship types
+        # Process edges to format relationship types for Neo4j
         for edge_key, edges in maybe_edges.items():
             for edge in edges:
-                # Get and validate relationship type
+                # Get original relationship type from LLM
                 original_rel_type = edge.get("relationship_type", "related")
                 
-                # Use registry to get standardized Neo4j type
-                neo4j_type = relationship_registry.get_neo4j_type(original_rel_type)
+                # Apply simple Neo4j formatting
+                neo4j_type = simple_neo4j_standardize(original_rel_type)
                 
-                # Update edge with standardized type
-                edge["relationship_type"] = neo4j_type.lower().replace('_', ' ')
-                edge["neo4j_type"] = neo4j_type
+                # Log the transformation for transparency
+                if original_rel_type != neo4j_type.lower().replace('_', ' '):
+                    logger.debug(f"Formatted relationship: '{original_rel_type}' -> Neo4j: '{neo4j_type}'")
                 
-                # Log mapping if different
-                if original_rel_type.lower() != edge["relationship_type"]:
-                    logger.debug(f"Mapped relationship '{original_rel_type}' to '{edge['relationship_type']}' (Neo4j: {neo4j_type})")
+                # Update edge with formatted types
+                edge["relationship_type"] = neo4j_type.lower().replace('_', ' ')  # Human-readable for compatibility
+                edge["original_type"] = original_rel_type  # Preserve original LLM output
+                edge["neo4j_type"] = neo4j_type  # Neo4j label format
+                edge["formatting_confidence"] = 1.0  # Always high confidence for direct formatting
+                
+                logger.debug(f"Preserved relationship: '{original_rel_type}' -> Neo4j: '{neo4j_type}'")
     
     return chunk_results
 

@@ -263,43 +263,63 @@ def create_app(args):
             **kwargs,
         )
 
-    embedding_func = EmbeddingFunc(
-        embedding_dim=args.embedding_dim,
-        max_token_size=args.max_embed_tokens,
-        func=lambda texts: lollms_embed(
-            texts,
-            embed_model=args.embedding_model,
-            host=args.embedding_binding_host,
-            api_key=args.embedding_binding_api_key,
+    # Create embedding function based on binding type
+    if args.embedding_binding == "lollms":
+        embedding_func = EmbeddingFunc(
+            embedding_dim=args.embedding_dim,
+            max_token_size=args.max_embed_tokens,
+            func=lambda texts: lollms_embed(
+                texts,
+                embed_model=args.embedding_model,
+                host=args.embedding_binding_host,
+                api_key=args.embedding_binding_api_key,
+            )
         )
-        if args.embedding_binding == "lollms"
-        else ollama_embed(
-            texts,
-            embed_model=args.embedding_model,
-            host=args.embedding_binding_host,
-            api_key=args.embedding_binding_api_key,
+    elif args.embedding_binding == "ollama":
+        embedding_func = EmbeddingFunc(
+            embedding_dim=args.embedding_dim,
+            max_token_size=args.max_embed_tokens,
+            func=lambda texts: ollama_embed(
+                texts,
+                embed_model=args.embedding_model,
+                host=args.embedding_binding_host,
+                api_key=args.embedding_binding_api_key,
+            )
         )
-        if args.embedding_binding == "ollama"
-        else azure_openai_embed(
-            texts,
-            model=args.embedding_model,  # no host is used for openai,
-            api_key=args.embedding_binding_api_key,
+    elif args.embedding_binding == "azure_openai":
+        embedding_func = EmbeddingFunc(
+            embedding_dim=args.embedding_dim,
+            max_token_size=args.max_embed_tokens,
+            func=lambda texts: azure_openai_embed(
+                texts,
+                model=args.embedding_model,  # no host is used for openai,
+                api_key=args.embedding_binding_api_key,
+            )
         )
-        if args.embedding_binding == "azure_openai"
-        else openai_embed(
-            texts,
-            model=args.embedding_model,
-            base_url=args.embedding_binding_host,
-            api_key=args.embedding_binding_api_key,
+    elif args.embedding_binding == "openai":
+        embedding_func = EmbeddingFunc(
+            embedding_dim=args.embedding_dim,
+            max_token_size=args.max_embed_tokens,
+            func=lambda texts: openai_embed(
+                texts,
+                model=args.embedding_model,
+                base_url=args.embedding_binding_host,
+                api_key=args.embedding_binding_api_key,
+            )
         )
-        if args.embedding_binding == "openai"
-        else anthropic_embed(
-            texts,
-            model=args.embedding_model,
-            base_url=args.embedding_binding_host,
-            api_key=os.getenv("VOYAGE_API_KEY") or args.embedding_binding_api_key,
-        ),
-    )
+    elif args.embedding_binding == "anthropic":
+        embedding_func = EmbeddingFunc(
+            embedding_dim=args.embedding_dim,
+            max_token_size=args.max_embed_tokens,
+            func=lambda texts: anthropic_embed(
+                texts,
+                model=args.embedding_model,
+                base_url=args.embedding_binding_host,
+                api_key=os.getenv("VOYAGE_API_KEY") or args.embedding_binding_api_key,
+            )
+        )
+    else:
+        raise ValueError(f"Unsupported embedding_binding: {args.embedding_binding}")
 
     # Initialize RAG
     if args.llm_binding in ["lollms", "ollama", "openai"]:

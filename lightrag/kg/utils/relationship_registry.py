@@ -187,7 +187,8 @@ class RelationshipTypeRegistry:
             "ASSOCIATED_WITH",
             "PART_OF",
             "CONTAINS",
-            "BELONGS_TO"
+            "BELONGS_TO",
+            "USED_FOR"
         ]
 
         # Common relationship variants that need normalization
@@ -248,6 +249,9 @@ class RelationshipTypeRegistry:
             "backed by": "BACKED_BY",
             "dockerized": "CONTAINERIZED_IN",
             "in container": "CONTAINERIZED_IN",
+            "manages traffic for": "LOAD_BALANCES",
+            "load balances": "LOAD_BALANCES",
+            "balances traffic": "LOAD_BALANCES",
             
             # Development variants
             "requires": "DEPENDS_ON",
@@ -266,6 +270,52 @@ class RelationshipTypeRegistry:
             "follows": "CHAINS_TO",
             "notifies via": "NOTIFIES",
             "alerts": "NOTIFIES",
+            
+            # Classification variants
+            "is a": "PART_OF",
+            "is a type of": "PART_OF",
+            "type of": "PART_OF",
+            "instance of": "PART_OF",
+            "kind of": "PART_OF",
+            "category of": "PART_OF",
+            
+            # Usage variants
+            "used for": "USED_FOR",
+            "utilized by": "USED_FOR",
+            "employed by": "USED_FOR",
+            "leveraged by": "USED_FOR",
+            "applied to": "USED_FOR",
+            "used in": "USED_FOR",
+            "utilized in": "USED_FOR",
+            
+            # Traffic/Network variants
+            "directs traffic to": "ROUTES_TO",
+            "routes traffic to": "ROUTES_TO",
+            "forwards to": "ROUTES_TO",
+            "redirects to": "ROUTES_TO",
+            
+            # Enhancement/Improvement variants
+            "improves": "OPTIMIZES",
+            "enhances": "OPTIMIZES",
+            "boosts": "OPTIMIZES",
+            "speeds up": "OPTIMIZES",
+            
+            # Error/Issue variants
+            "causes": "TRIGGERS",
+            "leads to": "TRIGGERS",
+            "results in": "TRIGGERS",
+            "manifests as": "PART_OF",
+            
+            # Monitoring/Tracking variants
+            "tracks": "MONITORS",
+            "observes": "MONITORS",
+            "watches": "MONITORS",
+            "measures": "MONITORS",
+            
+            # Protection/Security variants
+            "protects against": "SECURES",
+            "defends from": "SECURES",
+            "guards against": "SECURES",
             
             # Generic variants
             "related to": "RELATED",
@@ -464,6 +514,7 @@ class RelationshipTypeRegistry:
         for reg_type in self.registry:
             # Check if one is a substring of the other
             if rel_type in reg_type or reg_type in rel_type:
+                logger.debug(f"Found substring match for '{rel_type}': '{reg_type}'")
                 return reg_type
         
         # If no substring match, use fuzzy matching
@@ -477,7 +528,148 @@ class RelationshipTypeRegistry:
                 best_score = score
                 best_match = reg_type
                 
+        if best_match:
+            logger.debug(f"Found fuzzy match for '{rel_type}': '{best_match}' (score: {best_score})")
+                
         return best_match
+
+    def find_best_match_with_confidence(self, rel_type: str) -> Tuple[Optional[str], float]:
+        """
+        Find the best matching relationship type with confidence score.
+        
+        Args:
+            rel_type: Relationship type to find match for
+            
+        Returns:
+            Tuple of (best_match, confidence_score) where confidence is 0.0-1.0
+        """
+        if not rel_type:
+            return None, 0.0
+        
+        rel_type_lower = rel_type.lower()
+        
+        # Direct match gets highest confidence
+        if rel_type_lower in self.registry:
+            return rel_type_lower, 1.0
+        
+        # Check for substring matches (high confidence)
+        for reg_type in self.registry:
+            if rel_type_lower in reg_type or reg_type in rel_type_lower:
+                confidence = 0.9 + (0.1 * max(len(rel_type_lower), len(reg_type)) / 
+                                   max(len(rel_type_lower) + len(reg_type), 1))
+                return reg_type, min(confidence, 0.99)  # Cap at 0.99 for substring matches
+        
+        # Fuzzy matching with normalized confidence
+        best_match = None
+        best_score = 0
+        
+        for reg_type in self.registry:
+            # Use multiple similarity metrics for better accuracy
+            ratio_score = fuzz.ratio(rel_type_lower, reg_type)
+            token_sort_score = fuzz.token_sort_ratio(rel_type_lower, reg_type)
+            token_set_score = fuzz.token_set_ratio(rel_type_lower, reg_type)
+            
+            # Weighted average with emphasis on ratio score
+            combined_score = (0.5 * ratio_score + 0.3 * token_sort_score + 0.2 * token_set_score)
+            
+            if combined_score > best_score:
+                best_score = combined_score
+                best_match = reg_type
+        
+        # Convert score to confidence (0-1) with minimum threshold
+        if best_score >= 70:  # Minimum threshold
+            confidence = (best_score - 70) / 30.0  # Map 70-100 to 0.0-1.0
+            return best_match, min(confidence, 0.85)  # Cap fuzzy matches at 0.85
+        
+        return None, 0.0
+
+    def get_relationship_suggestions(self, rel_type: str, max_suggestions: int = 3) -> List[Tuple[str, float]]:
+        """
+        Get multiple relationship type suggestions with confidence scores.
+        
+        Args:
+            rel_type: Relationship type to find suggestions for
+            max_suggestions: Maximum number of suggestions to return
+            
+        Returns:
+            List of (relationship_type, confidence) tuples, sorted by confidence
+        """
+        if not rel_type:
+            return []
+        
+        rel_type_lower = rel_type.lower()
+        
+        # Direct match
+        if rel_type_lower in self.registry:
+            return [(rel_type_lower, 1.0)]
+        
+        suggestions = []
+        
+        for reg_type in self.registry:
+            # Use multiple similarity metrics
+            ratio_score = fuzz.ratio(rel_type_lower, reg_type)
+            token_sort_score = fuzz.token_sort_ratio(rel_type_lower, reg_type)
+            token_set_score = fuzz.token_set_ratio(rel_type_lower, reg_type)
+            partial_score = fuzz.partial_ratio(rel_type_lower, reg_type)
+            
+            # Weighted average with domain-specific emphasis
+            combined_score = (0.4 * ratio_score + 0.25 * token_sort_score + 
+                            0.25 * token_set_score + 0.1 * partial_score)
+            
+            # Apply domain-specific boosts
+            domain_boost = self._calculate_domain_boost(rel_type_lower, reg_type)
+            combined_score = min(combined_score + domain_boost, 100)
+            
+            # Convert to confidence score
+            if combined_score >= 50:  # Lower threshold for suggestions
+                confidence = (combined_score - 50) / 50.0
+                suggestions.append((reg_type, min(confidence, 0.95)))
+        
+        # Sort by confidence and return top suggestions
+        suggestions.sort(key=lambda x: x[1], reverse=True)
+        return suggestions[:max_suggestions]
+
+    def _calculate_domain_boost(self, input_type: str, registry_type: str) -> float:
+        """
+        Calculate domain-specific boost for relationship type matching.
+        
+        Args:
+            input_type: Input relationship type
+            registry_type: Registry relationship type to compare
+            
+        Returns:
+            Boost score (0-10) to add to similarity score
+        """
+        boost = 0.0
+        
+        # Domain keyword mappings
+        domain_keywords = {
+            'api': ['call', 'request', 'endpoint', 'webhook', 'subscribe', 'publish'],
+            'ai': ['train', 'model', 'embed', 'generate', 'llm', 'prompt', 'vector'],
+            'data': ['read', 'write', 'stream', 'batch', 'aggregate', 'filter', 'map'],
+            'frontend': ['render', 'display', 'route', 'event', 'style', 'animate'],
+            'backend': ['process', 'query', 'cache', 'validate', 'transform', 'schedule'],
+            'infra': ['deploy', 'container', 'scale', 'host', 'replicate', 'monitor']
+        }
+        
+        # Check for domain keyword matches
+        for domain, keywords in domain_keywords.items():
+            input_has_keyword = any(keyword in input_type for keyword in keywords)
+            registry_has_keyword = any(keyword in registry_type for keyword in keywords)
+            
+            if input_has_keyword and registry_has_keyword:
+                boost += 5.0  # Strong domain match
+            elif input_has_keyword or registry_has_keyword:
+                boost += 2.0  # Partial domain match
+        
+        # Length similarity boost (prefer similar lengths)
+        length_diff = abs(len(input_type) - len(registry_type))
+        if length_diff <= 2:
+            boost += 3.0
+        elif length_diff <= 5:
+            boost += 1.0
+        
+        return boost
 
     def validate_relationship_type(self, rel_type: str) -> Tuple[bool, Optional[str]]:
         """
@@ -498,12 +690,94 @@ class RelationshipTypeRegistry:
         if rel_type_lower in self.registry:
             return True, None
         
-        # Find closest match
-        closest_match = self._find_closest_match(rel_type_lower)
-        if closest_match:
-            return False, closest_match
+        # Use enhanced confidence-based matching
+        best_match, confidence = self.find_best_match_with_confidence(rel_type)
         
-        return False, None
+        if best_match and confidence >= 0.7:  # High confidence threshold for validation
+            logger.info(f"Relationship type '{rel_type}' validated with match '{best_match}' (confidence: {confidence:.2f})")
+            return True, best_match
+        elif best_match and confidence >= 0.4:  # Suggest alternative for medium confidence
+            logger.warning(f"Relationship type '{rel_type}' has low confidence match '{best_match}' (confidence: {confidence:.2f})")
+            return False, best_match
+        
+        # No good match found, suggest generic type
+        logger.warning(f"No suitable match found for relationship type '{rel_type}', suggesting 'related'")
+        return False, "related"
+
+    def validate_relationship_type_detailed(self, rel_type: str) -> Dict[str, Any]:
+        """
+        Enhanced validation with detailed feedback and confidence scores.
+        
+        Args:
+            rel_type: Relationship type to validate
+            
+        Returns:
+            Dictionary with validation results and suggestions
+        """
+        if not rel_type:
+            return {
+                "is_valid": False,
+                "confidence": 0.0,
+                "best_match": "related",
+                "suggestions": [("related", 1.0)],
+                "feedback": "Empty relationship type provided"
+            }
+        
+        rel_type_lower = rel_type.lower()
+        
+        # Direct match
+        if rel_type_lower in self.registry:
+            return {
+                "is_valid": True,
+                "confidence": 1.0,
+                "best_match": rel_type_lower,
+                "suggestions": [(rel_type_lower, 1.0)],
+                "feedback": "Exact match found"
+            }
+        
+        # Get best match with confidence
+        best_match, confidence = self.find_best_match_with_confidence(rel_type)
+        
+        # Get multiple suggestions
+        suggestions = self.get_relationship_suggestions(rel_type, max_suggestions=5)
+        
+        # Determine validity based on confidence
+        is_valid = confidence >= 0.7
+        
+        # Generate feedback message
+        feedback = self._generate_validation_feedback(rel_type, best_match, confidence, is_valid)
+        
+        return {
+            "is_valid": is_valid,
+            "confidence": confidence,
+            "best_match": best_match or "related",
+            "suggestions": suggestions if suggestions else [("related", 1.0)],
+            "feedback": feedback
+        }
+
+    def _generate_validation_feedback(self, input_type: str, best_match: Optional[str], 
+                                    confidence: float, is_valid: bool) -> str:
+        """
+        Generate human-readable feedback for relationship type validation.
+        
+        Args:
+            input_type: Original input relationship type
+            best_match: Best matching registry type
+            confidence: Confidence score (0.0-1.0)
+            is_valid: Whether the type is considered valid
+            
+        Returns:
+            Human-readable feedback message
+        """
+        if is_valid and best_match:
+            if confidence == 1.0:
+                return f"'{input_type}' is a registered relationship type"
+            else:
+                return f"'{input_type}' closely matches '{best_match}' (confidence: {confidence:.1%})"
+        elif best_match and confidence >= 0.4:
+            return f"'{input_type}' has moderate similarity to '{best_match}' (confidence: {confidence:.1%}). Consider using the suggested type."
+        else:
+            return f"'{input_type}' is not recognized. Using generic 'related' type. Consider using a more specific relationship type."
 
     def get_category_relationships(self, category: str) -> List[str]:
         """
