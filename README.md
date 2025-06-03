@@ -38,6 +38,37 @@
     <a href="https://trendshift.io/repositories/13043" target="_blank"><img src="https://trendshift.io/api/badge/repositories/13043" alt="HKUDS%2FLightRAG | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </div>
 
+## 🔥 Enhanced Fork Features
+
+This enhanced fork of LightRAG includes significant improvements for production use and graph visualization:
+
+### 🎯 **Production-Ready Enhancements**
+- ✅ **Fixed Neo4j Relationship Bug**: Resolved critical TypeError in `get_knowledge_graph` method preventing relationship visualization
+- ✅ **Advanced Graph Processing**: Enhanced relationship extraction with standardized type mapping and semantic weight processing  
+- ✅ **Database Validation**: Comprehensive validation for node and edge data before storage operations
+- ✅ **Connection Health Monitoring**: Circuit breaker pattern with automatic reconnection and graceful degradation
+- ✅ **Performance Optimizations**: Embedding caching, batch operations, and improved error handling
+
+### 🎨 **Graph Visualization Improvements**
+- ✅ **Working Graph Visualizer**: Fully functional 3D graph visualization with proper relationship rendering
+- ✅ **Enhanced GraphML Export**: Improved export functionality with proper node and edge attributes
+- ✅ **Relationship Type Registry**: Standardized relationship type management across the system
+- ✅ **Dynamic Threshold Management**: Adaptive relationship weight thresholds based on content
+
+### 🛠 **Technical Improvements**
+- ✅ **Robust Error Handling**: Comprehensive exception handling with detailed logging
+- ✅ **Memory Management**: Optimized memory usage for large graphs with proper resource cleanup
+- ✅ **Async/Await Patterns**: Full async implementation for better concurrency and performance
+- ✅ **Type Safety**: Enhanced type annotations and validation throughout the codebase
+
+### 📊 **Storage Enhancements**
+- ✅ **Neo4j Reliability**: Improved Neo4j driver usage with proper session management
+- ✅ **PostgreSQL Integration**: Enhanced vector storage with batch embedding retrieval
+- ✅ **Failover Support**: Graceful degradation when storage backends are unavailable
+- ✅ **Data Consistency**: Atomic operations and proper transaction handling
+
+**Perfect for**: Production deployments, large-scale knowledge graphs, applications requiring reliable graph visualization, and systems needing robust error handling.
+
 ## 🎉 News
 
 - [X] [2025.03.18]🎯📢LightRAG now supports citation functionality, enabling proper source attribution.
@@ -139,7 +170,7 @@ curl https://raw.githubusercontent.com/gusye1234/nano-graphrag/main/tests/mock_d
 python examples/lightrag_openai_demo.py
 ```
 
-For a streaming response implementation example, please see `examples/lightrag_openai_compatible_demo.py`. Prior to execution, ensure you modify the sample code’s LLM and embedding configurations accordingly.
+For a streaming response implementation example, please see `examples/lightrag_openai_compatible_demo.py`. Prior to execution, ensure you modify the sample code's LLM and embedding configurations accordingly.
 
 **Note 1**: When running the demo program, please be aware that different test scripts may use different embedding models. If you switch to a different embedding model, you must clear the data directory (`./dickens`); otherwise, the program may encounter errors. If you wish to retain the LLM cache, you can preserve the `kv_store_llm_response_cache.json` file while clearing the data directory.
 
@@ -1318,6 +1349,79 @@ Output your evaluation in the following JSON format:
 |**Empowerment**|41.2%|**58.8%**|45.2%|**54.8%**|43.6%|**56.4%**|**50.8%**|49.2%|
 |**Overall**|45.2%|**54.8%**|48.0%|**52.0%**|47.2%|**52.8%**|**50.4%**|49.6%|
 
+## 🔧 Enhanced Fork Technical Details
+
+### Critical Neo4j Relationship Bug Fix
+
+This fork resolves a critical bug in the original LightRAG that prevented graph visualization from working correctly. The issue was in the `get_knowledge_graph` method in `lightrag/kg/neo4j_impl.py`:
+
+**Problem**: The original code attempted to access relationship endpoints directly:
+```python
+# ❌ This doesn't work - rel.start_node and rel.end_node return None
+for rel in path_rels:
+    rel_source = rel.start_node.get("entity_id")  
+    rel_target = rel.end_node.get("entity_id")  
+```
+
+**Solution**: Use Cypher functions to properly extract relationship data:
+```python
+# ✅ Correct approach using Cypher functions
+edge_query = f"""
+MATCH (source:base)
+WHERE source.entity_id IN $node_ids
+MATCH path = (source)-[r*1..{max_depth}]-(target:base)
+UNWIND relationships(path) as rel
+RETURN startNode(rel) as start_node, endNode(rel) as end_node, rel, type(rel) as rel_type
+"""
+
+async for record in edge_result:
+    start_node = record["start_node"]
+    end_node = record["end_node"]
+    rel_source = start_node.get("entity_id")
+    rel_target = end_node.get("entity_id")
+```
+
+### Enhanced Error Handling & Resilience
+
+The fork includes production-ready improvements:
+
+- **Circuit Breaker Pattern**: Automatic failover when database connections fail
+- **Health Monitoring**: Continuous connection health checks with exponential backoff
+- **Graceful Degradation**: System continues operating even when storage backends are unavailable
+- **Comprehensive Validation**: Data validation before database operations to prevent corruption
+
+### Performance Optimizations
+
+- **Embedding Caching**: LRU cache for entity embeddings to reduce redundant API calls
+- **Batch Operations**: Optimized batch processing for large datasets
+- **Async Implementation**: Full async/await pattern for better concurrency
+- **Memory Management**: Proper resource cleanup and memory optimization
+
+### Getting Started with Enhanced Features
+
+To use the enhanced graph visualization:
+
+```python
+# Enable robust Neo4j storage with health monitoring
+rag = LightRAG(
+    working_dir=WORKING_DIR,
+    graph_storage=Neo4JStorage(
+        namespace="your_namespace",
+        enable_graceful_degradation=True,  # Continue operating if Neo4j fails
+        max_connection_failures=5,         # Circuit breaker threshold
+        use_dynamic_thresholds=True        # Adaptive relationship weights
+    ),
+    embedding_func=openai_embed,
+    llm_model_func=gpt_4o_mini_complete,
+)
+
+# Generate knowledge graph with working visualization
+kg = await rag.graph_storage.get_knowledge_graph(node_label="*", max_depth=3)
+
+# Export to GraphML for visualization tools
+await rag.graph_storage.export_graphml("output.graphml")
+```
+
 ## Reproduce
 
 All the code can be found in the `./reproduce` directory.
@@ -1489,3 +1593,7 @@ primaryClass={cs.IR}
 ```
 
 **Thank you for your interest in our work!**
+
+## Delete
+
+In LightRAG, you can delete entities that have been extracted and inserted. [See examples](./examples/lightrag_delete_demo.py)
