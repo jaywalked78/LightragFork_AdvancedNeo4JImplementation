@@ -1965,7 +1965,8 @@ class Neo4JStorage(BaseGraphStorage):
         WHERE source.entity_id IN $seed_entities
         MATCH path = (source)-[r*1..{max_hops}]-(target:base)
         {filter_clause}
-        RETURN nodes(path) as path_nodes, relationships(path) as path_rels
+        UNWIND relationships(path) as rel
+        RETURN nodes(path) as path_nodes, startNode(rel) as start_node, endNode(rel) as end_node, rel, type(rel) as rel_type
         LIMIT $max_nodes
         """
         
@@ -1981,9 +1982,8 @@ class Neo4JStorage(BaseGraphStorage):
                 seen_edges = set()
                 
                 async for record in result:
-                    if "path_nodes" in record and "path_rels" in record:
+                    if "path_nodes" in record:
                         path_nodes = record["path_nodes"]
-                        path_rels = record["path_rels"]
                         
                         # Process nodes
                         for node in path_nodes:
@@ -2006,43 +2006,53 @@ class Neo4JStorage(BaseGraphStorage):
                                     },
                                 ))
                                 
-                        # Process relationships
-                        for rel in path_rels:
-                            source_id = rel.start_node.get("entity_id")
-                            target_id = rel.end_node.get("entity_id")
-                            rel_type = rel.type
+                    # Process relationships using the explicit start_node and end_node
+                    if "start_node" in record and "end_node" in record and "rel" in record:
+                        start_node = record["start_node"]
+                        end_node = record["end_node"]
+                        rel = record["rel"]
+                        rel_type = record["rel_type"]
+                        
+                        if start_node and end_node:
+                            source_id = start_node.get("entity_id")
+                            target_id = end_node.get("entity_id")
                             
-                            # Create unique edge ID to avoid duplicates
-                            edge_key = tuple(sorted([source_id, target_id, rel_type]))
-                            
-                            if edge_key not in seen_edges:
-                                seen_edges.add(edge_key)
+                            if source_id and target_id:
+                                # Create unique edge ID to avoid duplicates
+                                edge_key = tuple(sorted([source_id, target_id, rel_type]))
                                 
-                                # Convert Neo4j relationship to KnowledgeGraphEdge
-                                rel_dict = dict(rel)
-                                
-                                # Ensure numeric edge weight (PRD 4.2.2)
-                                edge_weight = 1.0 # Default if not found or invalid
-                                try:
-                                    raw_weight = rel_dict.get("weight")
-                                    if raw_weight is not None:
-                                        edge_weight = float(raw_weight)
-                                except (ValueError, TypeError):
-                                    utils.logger.warning(f"Edge {source_id}->{target_id} has invalid DB weight '{raw_weight}'. Defaulting to 1.0.")
-                                
-                                result.edges.append(KnowledgeGraphEdge(
-                                    source=source_id,
-                                    target=target_id,
-                                    id=f"{source_id}_{target_id}_{rel_type}",
-                                    type=rel_type,
-                                    properties={
-                                        "relationship_type": rel_type,
-                                        "weight": edge_weight,        # Ensures float
-                                        "description": rel_dict.get("description", f"Relationship between {source_id} and {target_id}"),
-                                        **{k: v for k, v in rel_dict.items() 
-                                          if k not in ["weight", "description"]}
-                                    },
-                                ))
+                                if edge_key not in seen_edges:
+                                    seen_edges.add(edge_key)
+                                    
+                                    # Convert Neo4j relationship to KnowledgeGraphEdge
+                                    rel_dict = dict(rel)
+                                    
+                                    # Ensure numeric edge weight
+                                    edge_weight = 1.0  # Default if not found or invalid
+                                    try:
+                                        raw_weight = rel_dict.get("weight")
+                                        if raw_weight is not None:
+                                            edge_weight = float(raw_weight)
+                                            # Ensure weight is not NaN or Inf, which can also cause issues
+                                            if not (isinstance(edge_weight, (int, float)) and edge_weight == edge_weight): # Checks for NaN
+                                                utils.logger.warning(f"Edge {source_id}->{target_id} (type: {rel_type}) has non-finite DB weight '{raw_weight}'. Defaulting to 1.0.")
+                                                edge_weight = 1.0
+                                    except (ValueError, TypeError):
+                                        utils.logger.warning(f"Edge {source_id}->{target_id} (type: {rel_type}) has invalid DB weight '{raw_weight}'. Defaulting to 1.0.")
+                                    
+                                    result.edges.append(KnowledgeGraphEdge(
+                                        source=source_id,
+                                        target=target_id,
+                                        id=f"{source_id}_{target_id}_{rel_type}",
+                                        type=rel_type,
+                                        properties={
+                                            "relationship_type": rel_type,
+                                            "weight": edge_weight,        # Ensures it's always a valid float
+                                            "description": rel_dict.get("description", f"Relationship between {source_id} and {target_id}"),
+                                            **{k: v for k, v in rel_dict.items() 
+                                              if k not in ["weight", "description"]}
+                                        },
+                                    ))
                                 
                 await result.consume()
                 
@@ -2254,13 +2264,13 @@ class Neo4JStorage(BaseGraphStorage):
                 
                 # If we have nodes, get their relationships within max_depth
                 if node_ids and max_depth > 0:
-                    # Build edge query with depth limitation
+                    # Modified query to return nodes and relationships separately
                     edge_query = f"""
                     MATCH (source:base)
                     WHERE source.entity_id IN $node_ids
                     MATCH path = (source)-[r*1..{max_depth}]-(target:base)
-                    RETURN source.entity_id AS source_id, target.entity_id AS target_id,
-                           relationships(path) as path_rels
+                    UNWIND relationships(path) as rel
+                    RETURN startNode(rel) as start_node, endNode(rel) as end_node, rel, type(rel) as rel_type
                     LIMIT {max_nodes * 5}
                     """
                     
@@ -2269,46 +2279,52 @@ class Neo4JStorage(BaseGraphStorage):
                     
                     seen_edges = set()
                     async for record in edge_result:
-                        source_id = record["source_id"]
-                        target_id = record["target_id"]
-                        path_rels = record["path_rels"]
+                        start_node = record["start_node"]
+                        end_node = record["end_node"]
+                        rel = record["rel"]
+                        rel_type = record["rel_type"]
                         
-                        # Process each relationship in the path
-                        for rel in path_rels:
-                            rel_source = rel.start_node.get("entity_id")
-                            rel_target = rel.end_node.get("entity_id")
-                            rel_type = rel.type
-                            props = dict(rel) if rel else {}
+                        if start_node and end_node:
+                            rel_source = start_node.get("entity_id")
+                            rel_target = end_node.get("entity_id")
                             
-                            # Create unique edge key to avoid duplicates
-                            edge_key = tuple(sorted([rel_source, rel_target, rel_type]))
+                            if rel_source and rel_target:
+                                # Create unique edge key to avoid duplicates
+                                edge_key = tuple(sorted([rel_source, rel_target, rel_type]))
+                                
+                                if edge_key not in seen_edges:
+                                    seen_edges.add(edge_key)
+                                    
+                                    # Get relationship properties
+                                    props = dict(rel) if rel else {}
+                                    
+                                    # Ensure numeric edge weight
+                                    edge_weight = 1.0
+                                    try:
+                                        raw_weight = props.get("weight")
+                                        if raw_weight is not None:
+                                            edge_weight = float(raw_weight)
+                                            # Ensure weight is not NaN or Inf, which can also cause issues
+                                            if not (isinstance(edge_weight, (int, float)) and edge_weight == edge_weight): # Checks for NaN
+                                                utils.logger.warning(f"Edge {rel_source}->{rel_target} (type: {rel_type}) has non-finite DB weight '{raw_weight}'. Defaulting to 1.0.")
+                                                edge_weight = 1.0
+                                    except (ValueError, TypeError):
+                                        utils.logger.warning(f"Edge {rel_source}->{rel_target} (type: {rel_type}) has invalid DB weight '{raw_weight}'. Defaulting to 1.0.")
+                                    
+                                    result.edges.append(KnowledgeGraphEdge(
+                                        source=rel_source,
+                                        target=rel_target,
+                                        id=f"{rel_source}_{rel_target}_{rel_type}",
+                                        type=rel_type,
+                                        properties={
+                                            "relationship_type": rel_type,
+                                            "weight": edge_weight,        # Ensures it's always a valid float
+                                            "description": props.get("description", f"Relationship between {rel_source} and {rel_target}"),
+                                            **{k: v for k, v in props.items() 
+                                              if k not in ["weight", "description"]}
+                                        },
+                                    ))
                             
-                            if edge_key not in seen_edges and rel_source and rel_target:
-                                seen_edges.add(edge_key)
-                                
-                                # Ensure numeric edge weight (PRD 4.2.2)
-                                edge_weight = 1.0 # Default if not found or invalid
-                                try:
-                                    raw_weight = props.get("weight")
-                                    if raw_weight is not None:
-                                        edge_weight = float(raw_weight)
-                                except (ValueError, TypeError):
-                                    utils.logger.warning(f"Edge {rel_source}->{rel_target} has invalid DB weight '{raw_weight}'. Defaulting to 1.0.")
-                                
-                                result.edges.append(KnowledgeGraphEdge(
-                                    source=rel_source,
-                                    target=rel_target,
-                                    id=f"{rel_source}_{rel_target}_{rel_type}",
-                                    type=rel_type,
-                                    properties={
-                                        "relationship_type": rel_type,
-                                        "weight": edge_weight,        # Ensures float
-                                        "description": props.get("description", f"Relationship between {rel_source} and {rel_target}"),
-                                        **{k: v for k, v in props.items() 
-                                          if k not in ["weight", "description"]}
-                                    },
-                                ))
-                                
                     await edge_result.consume()
                 
         except Exception as e:
