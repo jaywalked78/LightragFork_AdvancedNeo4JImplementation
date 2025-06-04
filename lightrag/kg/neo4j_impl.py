@@ -2272,18 +2272,18 @@ class Neo4JStorage(BaseGraphStorage):
                 
                 # If we have nodes, get their relationships within max_depth
                 if node_ids and max_depth > 0:
-                    # Modified query to return nodes and relationships separately
-                    edge_query = f"""
-                    MATCH (source:base)
-                    WHERE source.entity_id IN $node_ids
-                    MATCH path = (source)-[r*1..{max_depth}]-(target:base)
-                    UNWIND relationships(path) as rel
-                    RETURN startNode(rel) as start_node, endNode(rel) as end_node, rel, type(rel) as rel_type
-                    LIMIT {max_nodes * 5}
+                    # Query to get ONLY direct relationships between the nodes we already have
+                    # This ensures no edge references a node that's not in our node set
+                    edge_query = """
+                    MATCH (source:base)-[r]-(target:base)
+                    WHERE source.entity_id IN $node_ids AND target.entity_id IN $node_ids
+                    RETURN source as start_node, target as end_node, r as rel, type(r) as rel_type
+                    LIMIT $edge_limit
                     """
                     
-                    utils.logger.debug(f"Executing Cypher query in get_knowledge_graph (edges): {edge_query} with params: {{'node_ids': {node_ids}}}")
-                    edge_result = await session.run(edge_query, node_ids=node_ids)
+                    edge_limit = max_nodes * 5
+                    utils.logger.debug(f"Executing Cypher query in get_knowledge_graph (edges): {edge_query} with params: node_ids={len(node_ids)} nodes, edge_limit={edge_limit}")
+                    edge_result = await session.run(edge_query, node_ids=node_ids, edge_limit=edge_limit)
                     
                     seen_edges = set()
                     async for record in edge_result:
@@ -2296,7 +2296,9 @@ class Neo4JStorage(BaseGraphStorage):
                             rel_source = start_node.get("entity_id")
                             rel_target = end_node.get("entity_id")
                             
-                            if rel_source and rel_target:
+                            # Double-check that both source and target are in our node set
+                            # This provides extra safety against validation errors
+                            if rel_source and rel_target and rel_source in node_ids and rel_target in node_ids:
                                 # Create unique edge key to avoid duplicates
                                 edge_key = tuple(sorted([rel_source, rel_target, rel_type]))
                                 
