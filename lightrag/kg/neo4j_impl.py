@@ -2272,8 +2272,8 @@ class Neo4JStorage(BaseGraphStorage):
                 
                 # If we have nodes, get their relationships within max_depth
                 if node_ids and max_depth > 0:
-                    # Query to get ONLY direct relationships between the nodes we already have
-                    # This ensures no edge references a node that's not in our node set
+                    # Use a simple, reliable query to get all direct relationships between our nodes
+                    # This ensures we always get edges when relationships exist between our limited node set
                     edge_query = """
                     MATCH (source:base)-[r]-(target:base)
                     WHERE source.entity_id IN $node_ids AND target.entity_id IN $node_ids
@@ -2281,7 +2281,7 @@ class Neo4JStorage(BaseGraphStorage):
                     LIMIT $edge_limit
                     """
                     
-                    edge_limit = max_nodes * 5
+                    edge_limit = max_nodes * 10  # Increase limit to ensure we get more edges
                     utils.logger.debug(f"Executing Cypher query in get_knowledge_graph (edges): {edge_query} with params: node_ids={len(node_ids)} nodes, edge_limit={edge_limit}")
                     edge_result = await session.run(edge_query, node_ids=node_ids, edge_limit=edge_limit)
                     
