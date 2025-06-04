@@ -1174,6 +1174,10 @@ class Neo4JStorage(BaseGraphStorage):
                         original_type = record["original_type"]
                         rel_type = record["rel_type"]
                         
+                        # Clean escaped quotes from original_type (fix for frontend visualization)
+                        if original_type:
+                            original_type = original_type.strip().strip('"').strip("'")
+                        
                         # Prioritize types in this order: original_type, rel_type, neo4j_type
                         if original_type:
                             props["original_type"] = original_type
@@ -2027,8 +2031,12 @@ class Neo4JStorage(BaseGraphStorage):
                                     # Convert Neo4j relationship to KnowledgeGraphEdge
                                     rel_dict = dict(rel)
                                     
+                                    # Clean escaped quotes from original_type (fix for frontend visualization)
+                                    if "original_type" in rel_dict and rel_dict["original_type"]:
+                                        rel_dict["original_type"] = rel_dict["original_type"].strip().strip('"').strip("'")
+                                    
                                     # Ensure numeric edge weight
-                                    edge_weight = 1.0  # Default if not found or invalid
+                                    edge_weight = 1.0
                                     try:
                                         raw_weight = rel_dict.get("weight")
                                         if raw_weight is not None:
@@ -2297,6 +2305,10 @@ class Neo4JStorage(BaseGraphStorage):
                                     
                                     # Get relationship properties
                                     props = dict(rel) if rel else {}
+                                    
+                                    # Clean escaped quotes from original_type (fix for frontend visualization)
+                                    if "original_type" in props and props["original_type"]:
+                                        props["original_type"] = props["original_type"].strip().strip('"').strip("'")
                                     
                                     # Ensure numeric edge weight
                                     edge_weight = 1.0
