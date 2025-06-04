@@ -101,12 +101,13 @@ sigmaGraph: MultiUndirectedGraph | null
 
 3. `lightrag_webui/src/hooks/useRandomGraph.tsx` - For consistency in test graphs
 
-### Phase 2: Backend - Use True Unique Edge IDs
+### Phase 2: Backend - Use True Unique Edge IDs & Fix Node Reference Validation
 
-**Why this was needed**: We needed to ensure every distinct relationship from Neo4j gets a unique ID, not filtered out by composite key matching.
+**Why this was needed**: We needed to ensure every distinct relationship from Neo4j gets a unique ID, not filtered out by composite key matching. Additionally, we discovered that edges were referencing nodes outside the limited node set, causing validation failures.
 
 **File Changed**: `lightrag/kg/neo4j_impl.py`
 
+**Part A: Unique Edge IDs**
 ```python
 # OLD Cypher Query
 RETURN startNode(rel) as start_node, endNode(rel) as end_node, rel, type(rel) as rel_type
@@ -133,6 +134,21 @@ id=f"{rel_source}_{rel_target}_{rel_type}"
 # NEW Edge ID Assignment  
 id=rel_id  # Use Neo4j's unique relationship ID
 ```
+
+**Part B: Fix Node Reference Validation**
+```python
+# OLD Query (caused "Target node X is undefined" errors)
+MATCH (source:base)
+WHERE source.entity_id IN $node_ids
+MATCH path = (source)-[r*1..{max_depth}]-(target:base)
+UNWIND relationships(path) as rel
+
+# NEW Query (ensures both nodes exist in limited set)
+MATCH (source:base)-[rel]-(target:base)
+WHERE source.entity_id IN $node_ids AND target.entity_id IN $node_ids
+```
+
+This critical fix ensures that edges only connect nodes that exist in the frontend's limited node set, preventing "Target node X is undefined" validation errors.
 
 ### Phase 3: Frontend Build Process
 

@@ -40,7 +40,23 @@
 
 ## 🔥 Enhanced Fork Features
 
-This enhanced fork of LightRAG includes significant improvements for production use and graph visualization:
+This enhanced fork of LightRAG includes **major semantic relationship extraction improvements** and production-ready enhancements:
+
+### 🧠 **Advanced Semantic Relationship Extraction** (New!)
+- ✅ **35+ Semantic Relationship Types**: Replaces generic "related" with specific types like `calls_api`, `debugs`, `executes`, `processes`, `manages`, `integrates_with`
+- ✅ **Domain-Specific Entity Types**: Technical entities (`tool`, `technology`, `concept`, `workflow`, `artifact`) optimized for development workflows
+- ✅ **Relationship Strength Scoring**: Numeric scoring (1-10) for relationship importance and confidence
+- ✅ **Multi-word Relationship Handling**: Proper underscore formatting for complex relationships (`stored_in`, `calls_api`)
+- ✅ **Contextual Examples**: Comprehensive prompt examples showing ideal extraction patterns
+- ✅ **Prompt Customization Guide**: Complete documentation for adapting to different domains (healthcare, legal, financial, etc.)
+
+### 🎨 **Graph Visualization Improvements**
+- ✅ **Enhanced Multigraph Support**: Resolved visualization regression introduced during advanced Neo4j development
+- ✅ **Working Graph Visualizer**: Fully functional graph visualization with proper relationship rendering and multi-edge support
+- ✅ **Enhanced GraphML Export**: Improved export functionality with proper node and edge attributes
+- ✅ **Relationship Type Registry**: Standardized relationship type management across the system
+- ✅ **Dynamic Threshold Management**: Adaptive relationship weight thresholds based on content
+- ✅ **Node Reference Validation**: Ensures edges only reference nodes in the current view, preventing validation errors
 
 ### 🎯 **Production-Ready Enhancements**
 - ✅ **Fixed Neo4j Relationship Bug**: Resolved critical TypeError in `get_knowledge_graph` method preventing relationship visualization
@@ -48,12 +64,6 @@ This enhanced fork of LightRAG includes significant improvements for production 
 - ✅ **Database Validation**: Comprehensive validation for node and edge data before storage operations
 - ✅ **Connection Health Monitoring**: Circuit breaker pattern with automatic reconnection and graceful degradation
 - ✅ **Performance Optimizations**: Embedding caching, batch operations, and improved error handling
-
-### 🎨 **Graph Visualization Improvements**
-- ✅ **Working Graph Visualizer**: Fully functional 3D graph visualization with proper relationship rendering
-- ✅ **Enhanced GraphML Export**: Improved export functionality with proper node and edge attributes
-- ✅ **Relationship Type Registry**: Standardized relationship type management across the system
-- ✅ **Dynamic Threshold Management**: Adaptive relationship weight thresholds based on content
 
 ### 🛠 **Technical Improvements**
 - ✅ **Robust Error Handling**: Comprehensive exception handling with detailed logging

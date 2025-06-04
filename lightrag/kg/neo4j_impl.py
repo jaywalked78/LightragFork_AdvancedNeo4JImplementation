@@ -2266,11 +2266,9 @@ class Neo4JStorage(BaseGraphStorage):
                 if node_ids and max_depth > 0:
                     # Modified query to return nodes and relationships separately
                     edge_query = f"""
-                    MATCH (source:base)
-                    WHERE source.entity_id IN $node_ids
-                    MATCH path = (source)-[r*1..{max_depth}]-(target:base)
-                    UNWIND relationships(path) as rel
-                    RETURN startNode(rel) as start_node, endNode(rel) as end_node, rel, type(rel) as rel_type, elementId(rel) as rel_id
+                    MATCH (source:base)-[rel]-(target:base)
+                    WHERE source.entity_id IN $node_ids AND target.entity_id IN $node_ids
+                    RETURN source as start_node, target as end_node, rel, type(rel) as rel_type, elementId(rel) as rel_id
                     LIMIT {max_nodes * 5}
                     """
                     
