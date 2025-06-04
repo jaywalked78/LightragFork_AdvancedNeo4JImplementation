@@ -51,6 +51,7 @@ from .monitoring import (
 )
 import time
 from dotenv import load_dotenv
+from lightrag.kg.utils.relationship_registry import standardize_relationship_type
 
 # use the .env that is inside the current folder
 # allows to use different .env file for each lightrag instance
@@ -655,13 +656,10 @@ async def _merge_edges_then_upsert(
     if specific_neo4j_types:
         final_neo4j_type = specific_neo4j_types[0] # Take the first specific one
         logger.debug(f"For {src_id}->{tgt_id}, selected specific neo4j_type: '{final_neo4j_type}' from {specific_neo4j_types}")
-    elif final_original_type != "related": # If no specific neo4j_type, but specific original_type, standardize original
-        # This assumes advanced_operate's simple_neo4j_standardize is available or similar logic
-        final_neo4j_type = final_original_type.upper().replace(' ', '_').replace('-', '_')
-        final_neo4j_type = re.sub(r'[^A-Z0-9_]', '_', final_neo4j_type) # Basic sanitization
-        if not final_neo4j_type: 
-            final_neo4j_type = "RELATED"
-        logger.debug(f"For {src_id}->{tgt_id}, derived neo4j_type '{final_neo4j_type}' from original_type '{final_original_type}'")
+    elif final_original_type != "related": # If no specific neo4j_type, but specific original_type, use enhanced standardization
+        # Use the enhanced standardize_relationship_type function from the registry
+        final_neo4j_type = standardize_relationship_type(final_original_type)
+        logger.debug(f"For {src_id}->{tgt_id}, enhanced standardization: '{final_original_type}' -> '{final_neo4j_type}'")
 
     merged_edge["original_type"] = final_original_type
     merged_edge["neo4j_type"] = final_neo4j_type

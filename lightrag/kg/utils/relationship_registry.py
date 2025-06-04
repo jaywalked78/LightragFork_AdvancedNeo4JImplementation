@@ -16,27 +16,62 @@ from ...utils import logger
 
 def standardize_relationship_type(rel_type: str) -> str:
     """
-    Convert a relationship type string to Neo4j standard format.
+    Enhanced conversion of a relationship type string to Neo4j standard format.
+    
+    This function handles various input formats including:
+    - CamelCase/PascalCase (e.g., "createdBy" -> "CREATED_BY") 
+    - Space-separated (e.g., "created by" -> "CREATED_BY")
+    - Hyphen-separated (e.g., "created-by" -> "CREATED_BY")
+    - Already underscored (e.g., "created_by" -> "CREATED_BY")
+    - Mixed formats and special characters
     
     Args:
-        rel_type: Original relationship type string (e.g., "integrates with", "calls api")
+        rel_type: Original relationship type string
         
     Returns:
-        Standardized relationship type (e.g., "INTEGRATES_WITH", "CALLS_API")
+        Standardized Neo4j relationship type (e.g., "CREATED_BY", "INTEGRATES_WITH")
     """
+    # Step 1: Handle None or empty rel_type
+    if not rel_type or not isinstance(rel_type, str):
+        return "RELATED"
+    
+    # Step 2: Strip whitespace (but don't convert case yet)
+    rel_type = rel_type.strip()
+    
+    # Step 3: Handle CamelCase/PascalCase to snake_case conversion BEFORE lowercasing
+    # Only apply if no spaces or underscores are present (to avoid double processing)
+    if ' ' not in rel_type and '_' not in rel_type and '-' not in rel_type:
+        # Insert underscore before capital letters (for camelCase/PascalCase)
+        # This regex finds boundaries where a lowercase/digit is followed by uppercase
+        rel_type = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', rel_type)
+    
+    # Step 4: Now convert to lowercase
+    rel_type = rel_type.lower()
+    
+    # Step 5: Replace spaces and hyphens with underscores
+    rel_type = re.sub(r'[\s-]+', '_', rel_type)
+    
+    # Step 6: Remove any characters that are not alphanumeric or underscore
+    rel_type = re.sub(r'[^a-z0-9_]', '', rel_type)
+    
+    # Step 7: Collapse multiple underscores into one
+    rel_type = re.sub(r'_+', '_', rel_type)
+    
+    # Step 8: Remove leading/trailing underscores
+    rel_type = rel_type.strip('_')
+    
+    # Step 9: Check if result is empty after transformations
     if not rel_type:
         return "RELATED"
     
-    # Remove special characters, replace spaces with underscores, uppercase
-    std_type = re.sub(r'[^a-zA-Z0-9\s]', '', rel_type)
-    std_type = re.sub(r'\s+', '_', std_type)
+    # Step 10: Convert to uppercase
+    result = rel_type.upper()
     
-    # Ensure it's uppercase and not empty
-    result = std_type.upper() if std_type else "RELATED"
-    
-    # Truncate if too long for Neo4j (which has a limit for identifier length)
+    # Step 11: Truncate if too long for Neo4j (identifier length limit)
     if len(result) > 50:
         result = result[:50]
+        # Ensure we don't end with an underscore after truncation
+        result = result.rstrip('_')
         
     return result
 
@@ -326,32 +361,43 @@ class RelationshipTypeRegistry:
             "has": "CONTAINS"
         }
 
-        # Populate the registry with Neo4j types and additional metadata
+        # Populate the registry with Neo4j types using the enhanced standardization function
         for rel_type in relationship_types:
-            # Convert to lowercase for registry keys
+            # Convert to lowercase for registry keys (human-readable format)
             original_type = rel_type.lower().replace('_', ' ')
+            
+            # Use the enhanced standardize_relationship_type to generate neo4j_type
+            # This ensures consistency and proper formatting
+            neo4j_type = standardize_relationship_type(original_type)
             
             # Add to registry with metadata
             self.registry[original_type] = {
-                "neo4j_type": rel_type,
+                "neo4j_type": neo4j_type,
                 "description": f"Relationship type: {original_type}",
                 "bidirectional": original_type in ["related", "connected to", "associated with"],
                 "inverse": None
             }
         
-        # Add common variants
-        for variant, standard in common_variants.items():
+        # Add common variants using enhanced standardization
+        for variant, standard_neo4j in common_variants.items():
             if variant not in self.registry:
-                # Find the standardized form in our registry
-                standard_key = standard.lower().replace('_', ' ')
-                if standard_key in self.registry:
-                    # Use the same metadata but with the variant's neo4j_type
-                    self.registry[variant] = {
-                        "neo4j_type": standard,
-                        "description": f"Variant of {standard_key}: {variant}",
-                        "bidirectional": self.registry[standard_key].get("bidirectional", False),
-                        "inverse": self.registry[standard_key].get("inverse", None)
-                    }
+                # Convert the standard Neo4j type back to human-readable for registry key lookup
+                standard_key = standard_neo4j.lower().replace('_', ' ')
+                
+                # Use the enhanced standardize_relationship_type to ensure consistency
+                neo4j_type = standardize_relationship_type(variant)
+                
+                # If the variant doesn't standardize to the expected type, use the predefined mapping
+                if neo4j_type != standard_neo4j:
+                    neo4j_type = standard_neo4j
+                
+                # Create registry entry for the variant
+                self.registry[variant] = {
+                    "neo4j_type": neo4j_type,
+                    "description": f"Variant of {standard_key}: {variant}",
+                    "bidirectional": self.registry.get(standard_key, {}).get("bidirectional", False),
+                    "inverse": self.registry.get(standard_key, {}).get("inverse", None)
+                }
         
         # Define explicit bidirectional relationships and inverses
         inverse_pairs = [

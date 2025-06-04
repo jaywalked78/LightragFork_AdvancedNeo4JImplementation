@@ -1346,42 +1346,15 @@ async def extract_entities_with_types(
 ) -> list:
     """
     Enhanced entity extraction that preserves LLM-extracted relationship types
-    with simple Neo4j formatting. This approach is universally applicable to any domain.
+    with enhanced Neo4j formatting using the registry-based standardization.
     """
-    import re
+    from lightrag.kg.utils.relationship_registry import standardize_relationship_type
+    from lightrag.operate import extract_entities  # This is the base extraction function
     
-    def simple_neo4j_standardize(rel_type: str) -> str:
-        """
-        Convert LLM relationship type directly to Neo4j format without domain-specific validation.
-        This preserves the semantic intent while ensuring Neo4j compatibility.
-        
-        Args:
-            rel_type: Original relationship type from LLM
-            
-        Returns:
-            Neo4j-compatible relationship type
-        """
-        if not rel_type or not isinstance(rel_type, str):
-            return "RELATED"
-        
-        # Remove special characters, preserve alphanumeric and spaces
-        cleaned = re.sub(r'[^a-zA-Z0-9\s]', '', rel_type.strip())
-        
-        # Replace spaces with underscores and convert to uppercase
-        standardized = re.sub(r'\s+', '_', cleaned).upper()
-        
-        # Ensure it's not empty and not too long for Neo4j
-        if not standardized or len(standardized) == 0:
-            return "RELATED"
-        elif len(standardized) > 50:  # Neo4j identifier limit
-            standardized = standardized[:50]
-            
-        return standardized
+    logger.info("Using enhanced Neo4j relationship formatting with registry-based standardization")
     
-    logger.info("Using simple Neo4j relationship formatting (universally applicable)")
-    
-    # Get base extraction results without domain-specific enhancement
-    chunk_results = await base_extract_entities(
+    # Get base extraction results using the standard extract_entities function
+    chunk_results = await extract_entities(
         chunks,
         global_config,
         pipeline_status,
@@ -1389,7 +1362,7 @@ async def extract_entities_with_types(
         llm_response_cache,
     )
     
-    # Post-process to standardize relationship types for Neo4j
+    # Post-process to standardize relationship types for Neo4j using the enhanced function
     for maybe_nodes, maybe_edges in chunk_results:
         # Process edges to format relationship types for Neo4j
         for edge_key, edges in maybe_edges.items():
@@ -1397,20 +1370,20 @@ async def extract_entities_with_types(
                 # Get original relationship type from LLM
                 original_rel_type = edge.get("relationship_type", "related")
                 
-                # Apply simple Neo4j formatting
-                neo4j_type = simple_neo4j_standardize(original_rel_type)
+                # Apply enhanced Neo4j formatting using the registry-based function
+                neo4j_type = standardize_relationship_type(original_rel_type)
                 
                 # Log the transformation for transparency
                 if original_rel_type != neo4j_type.lower().replace('_', ' '):
-                    logger.debug(f"Formatted relationship: '{original_rel_type}' -> Neo4j: '{neo4j_type}'")
+                    logger.debug(f"Enhanced standardization: '{original_rel_type}' -> Neo4j: '{neo4j_type}'")
                 
                 # Update edge with formatted types
                 edge["relationship_type"] = neo4j_type.lower().replace('_', ' ')  # Human-readable for compatibility
                 edge["original_type"] = original_rel_type  # Preserve original LLM output
                 edge["neo4j_type"] = neo4j_type  # Neo4j label format
-                edge["formatting_confidence"] = 1.0  # Always high confidence for direct formatting
+                edge["formatting_confidence"] = 1.0  # Always high confidence for registry-based formatting
                 
-                logger.debug(f"Preserved relationship: '{original_rel_type}' -> Neo4j: '{neo4j_type}'")
+                logger.debug(f"Registry-based relationship: '{original_rel_type}' -> Neo4j: '{neo4j_type}'")
     
     return chunk_results
 

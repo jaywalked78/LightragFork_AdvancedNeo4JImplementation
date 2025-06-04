@@ -39,7 +39,7 @@ For each pair of related entities, extract the following information:
 - source_entity: name of the source entity, as identified in step 1
 - target_entity: name of the target entity, as identified in step 1
 - relationship_description: explanation as to why you think the source entity and the target entity are related to each other
-- relationship_type: Choose the most appropriate relationship type from the following list. If none fit exactly, choose "related":
+- relationship_type: Choose the most appropriate relationship type from the following list. If none fit exactly, choose "related". **For multi-word relationship types, use underscores to separate words (e.g., 'created_by', 'integrates_with', 'calls_api')**:
   {relationship_types}
   
   Examples of specific relationship types to prefer:
@@ -96,8 +96,8 @@ Output:
 ("entity"{tuple_delimiter}"n8n Code Node"{tuple_delimiter}"tool"{tuple_delimiter}"A node within n8n that allows execution of custom JavaScript code."){record_delimiter}
 ("entity"{tuple_delimiter}"Data Transformation"{tuple_delimiter}"concept"{tuple_delimiter}"The process of converting data from one format to another for compatibility between systems."){record_delimiter}
 ("entity"{tuple_delimiter}"JSON"{tuple_delimiter}"technology"{tuple_delimiter}"A data format used for API responses and data interchange."){record_delimiter}
-("relationship"{tuple_delimiter}"Lead Enricher Workflow"{tuple_delimiter}"n8n"{tuple_delimiter}"The Lead Enricher Workflow is built and executed within the n8n platform."{tuple_delimiter}"runs on"{tuple_delimiter}"workflow automation, platform usage"{tuple_delimiter}9){record_delimiter}
-("relationship"{tuple_delimiter}"Lead Enricher Workflow"{tuple_delimiter}"Brave Search API"{tuple_delimiter}"The workflow integrates with Brave Search API to gather company information."{tuple_delimiter}"calls api"{tuple_delimiter}"api integration, data acquisition"{tuple_delimiter}8){record_delimiter}
+("relationship"{tuple_delimiter}"Lead Enricher Workflow"{tuple_delimiter}"n8n"{tuple_delimiter}"The Lead Enricher Workflow is built and executed within the n8n platform."{tuple_delimiter}"runs_on"{tuple_delimiter}"workflow automation, platform usage"{tuple_delimiter}9){record_delimiter}
+("relationship"{tuple_delimiter}"Lead Enricher Workflow"{tuple_delimiter}"Brave Search API"{tuple_delimiter}"The workflow integrates with Brave Search API to gather company information."{tuple_delimiter}"calls_api"{tuple_delimiter}"api integration, data acquisition"{tuple_delimiter}8){record_delimiter}
 ("relationship"{tuple_delimiter}"Claude AI"{tuple_delimiter}"JavaScript"{tuple_delimiter}"Claude AI assists in debugging and refining JavaScript code for the workflow."{tuple_delimiter}"debugs"{tuple_delimiter}"code assistance, debugging"{tuple_delimiter}9){record_delimiter}
 ("relationship"{tuple_delimiter}"n8n Code Node"{tuple_delimiter}"JavaScript"{tuple_delimiter}"The n8n Code Node executes custom JavaScript code for data processing."{tuple_delimiter}"executes"{tuple_delimiter}"code execution, custom logic"{tuple_delimiter}10){record_delimiter}
 ("relationship"{tuple_delimiter}"n8n Code Node"{tuple_delimiter}"Data Transformation"{tuple_delimiter}"Code Nodes perform data transformation operations on API responses."{tuple_delimiter}"processes"{tuple_delimiter}"data processing, transformation"{tuple_delimiter}8){record_delimiter}
@@ -128,7 +128,7 @@ Output:
 ("relationship"{tuple_delimiter}"Claude AI"{tuple_delimiter}"setup-backup-cron.sh"{tuple_delimiter}"Claude AI generated the setup script for the backup system."{tuple_delimiter}"generates"{tuple_delimiter}"code generation, assistance"{tuple_delimiter}8){record_delimiter}
 ("relationship"{tuple_delimiter}"setup-backup-cron.sh"{tuple_delimiter}"NVM"{tuple_delimiter}"The setup script configures NVM environment for proper execution."{tuple_delimiter}"configures"{tuple_delimiter}"environment setup, configuration"{tuple_delimiter}7){record_delimiter}
 ("relationship"{tuple_delimiter}"NVM"{tuple_delimiter}"Node.js"{tuple_delimiter}"NVM manages the Node.js version required for n8n."{tuple_delimiter}"manages"{tuple_delimiter}"version management, runtime"{tuple_delimiter}8){record_delimiter}
-("relationship"{tuple_delimiter}"n8n workflows"{tuple_delimiter}"JSON files"{tuple_delimiter}"Workflows are exported and saved as timestamped JSON files."{tuple_delimiter}"exports to"{tuple_delimiter}"data export, backup"{tuple_delimiter}9){completion_delimiter}
+("relationship"{tuple_delimiter}"n8n workflows"{tuple_delimiter}"JSON files"{tuple_delimiter}"Workflows are exported and saved as timestamped JSON files."{tuple_delimiter}"exports_to"{tuple_delimiter}"data export, backup"{tuple_delimiter}9){completion_delimiter}
 #############################
 """,
     """Example 3:
@@ -149,7 +149,7 @@ Output:
 ("relationship"{tuple_delimiter}"Semantic Search"{tuple_delimiter}"OpenAI"{tuple_delimiter}"Semantic search is implemented using OpenAI's embedding technology."{tuple_delimiter}"uses"{tuple_delimiter}"implementation, AI integration"{tuple_delimiter}8){record_delimiter}
 ("relationship"{tuple_delimiter}"OpenAI"{tuple_delimiter}"Embeddings"{tuple_delimiter}"OpenAI provides the embedding models for text vectorization."{tuple_delimiter}"provides"{tuple_delimiter}"model provision, technology"{tuple_delimiter}9){record_delimiter}
 ("relationship"{tuple_delimiter}"RAG Pipeline"{tuple_delimiter}"Semantic Search"{tuple_delimiter}"The RAG pipeline incorporates semantic search for document retrieval."{tuple_delimiter}"incorporates"{tuple_delimiter}"pipeline component, search integration"{tuple_delimiter}9){record_delimiter}
-("relationship"{tuple_delimiter}"Embeddings"{tuple_delimiter}"Neo4j"{tuple_delimiter}"Document embeddings are stored in Neo4j for retrieval."{tuple_delimiter}"stored in"{tuple_delimiter}"data storage, vectorization"{tuple_delimiter}8){record_delimiter}
+("relationship"{tuple_delimiter}"Embeddings"{tuple_delimiter}"Neo4j"{tuple_delimiter}"Document embeddings are stored in Neo4j for retrieval."{tuple_delimiter}"stored_in"{tuple_delimiter}"data storage, vectorization"{tuple_delimiter}8){record_delimiter}
 ("relationship"{tuple_delimiter}"Neo4j"{tuple_delimiter}"Knowledge Graph"{tuple_delimiter}"Neo4j serves as the database for the knowledge graph implementation."{tuple_delimiter}"hosts"{tuple_delimiter}"graph storage, database"{tuple_delimiter}10){completion_delimiter}
 #############################
 """
