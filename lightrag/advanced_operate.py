@@ -67,6 +67,7 @@ from lightrag.operate import (
 from lightrag.base import BaseGraphStorage, BaseKVStorage, BaseVectorStorage, QueryParam
 from lightrag.prompt import PROMPTS, GRAPH_FIELD_SEP
 from lightrag.utils import Tokenizer
+from lightrag.kg.utils.relationship_registry import standardize_relationship_type
 
 
 def advanced_semantic_chunking(
@@ -1345,16 +1346,13 @@ async def extract_entities_with_types(
     llm_response_cache: BaseKVStorage | None = None,
 ) -> list:
     """
-    Enhanced entity extraction that preserves LLM-extracted relationship types
-    with enhanced Neo4j formatting using the registry-based standardization.
+    Enhanced entity extraction that uses the robust relationship type standardization
+    from the relationship registry for consistent formatting.
     """
-    from lightrag.kg.utils.relationship_registry import standardize_relationship_type
-    from lightrag.operate import extract_entities  # This is the base extraction function
+    logger.info("Using enhanced relationship type standardization from registry")
     
-    logger.info("Using enhanced Neo4j relationship formatting with registry-based standardization")
-    
-    # Get base extraction results using the standard extract_entities function
-    chunk_results = await extract_entities(
+    # Get base extraction results without domain-specific enhancement
+    chunk_results = await base_extract_entities(
         chunks,
         global_config,
         pipeline_status,
@@ -1362,7 +1360,7 @@ async def extract_entities_with_types(
         llm_response_cache,
     )
     
-    # Post-process to standardize relationship types for Neo4j using the enhanced function
+    # Post-process to standardize relationship types for Neo4j
     for maybe_nodes, maybe_edges in chunk_results:
         # Process edges to format relationship types for Neo4j
         for edge_key, edges in maybe_edges.items():
@@ -1370,20 +1368,20 @@ async def extract_entities_with_types(
                 # Get original relationship type from LLM
                 original_rel_type = edge.get("relationship_type", "related")
                 
-                # Apply enhanced Neo4j formatting using the registry-based function
+                # Apply enhanced Neo4j standardization from registry
                 neo4j_type = standardize_relationship_type(original_rel_type)
                 
                 # Log the transformation for transparency
                 if original_rel_type != neo4j_type.lower().replace('_', ' '):
-                    logger.debug(f"Enhanced standardization: '{original_rel_type}' -> Neo4j: '{neo4j_type}'")
+                    logger.debug(f"Standardized relationship: '{original_rel_type}' -> Neo4j: '{neo4j_type}'")
                 
                 # Update edge with formatted types
                 edge["relationship_type"] = neo4j_type.lower().replace('_', ' ')  # Human-readable for compatibility
                 edge["original_type"] = original_rel_type  # Preserve original LLM output
                 edge["neo4j_type"] = neo4j_type  # Neo4j label format
-                edge["formatting_confidence"] = 1.0  # Always high confidence for registry-based formatting
+                edge["formatting_confidence"] = 1.0  # Always high confidence for enhanced standardization
                 
-                logger.debug(f"Registry-based relationship: '{original_rel_type}' -> Neo4j: '{neo4j_type}'")
+                logger.debug(f"Enhanced standardization: '{original_rel_type}' -> Neo4j: '{neo4j_type}'")
     
     return chunk_results
 

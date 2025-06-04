@@ -1174,10 +1174,6 @@ class Neo4JStorage(BaseGraphStorage):
                         original_type = record["original_type"]
                         rel_type = record["rel_type"]
                         
-                        # Clean escaped quotes from original_type (fix for frontend visualization)
-                        if original_type:
-                            original_type = original_type.strip().strip('"').strip("'")
-                        
                         # Prioritize types in this order: original_type, rel_type, neo4j_type
                         if original_type:
                             props["original_type"] = original_type
@@ -2031,12 +2027,8 @@ class Neo4JStorage(BaseGraphStorage):
                                     # Convert Neo4j relationship to KnowledgeGraphEdge
                                     rel_dict = dict(rel)
                                     
-                                    # Clean escaped quotes from original_type (fix for frontend visualization)
-                                    if "original_type" in rel_dict and rel_dict["original_type"]:
-                                        rel_dict["original_type"] = rel_dict["original_type"].strip().strip('"').strip("'")
-                                    
                                     # Ensure numeric edge weight
-                                    edge_weight = 1.0
+                                    edge_weight = 1.0  # Default if not found or invalid
                                     try:
                                         raw_weight = rel_dict.get("weight")
                                         if raw_weight is not None:
@@ -2272,18 +2264,18 @@ class Neo4JStorage(BaseGraphStorage):
                 
                 # If we have nodes, get their relationships within max_depth
                 if node_ids and max_depth > 0:
-                    # Use a simple, reliable query to get all direct relationships between our nodes
-                    # This ensures we always get edges when relationships exist between our limited node set
-                    edge_query = """
-                    MATCH (source:base)-[r]-(target:base)
-                    WHERE source.entity_id IN $node_ids AND target.entity_id IN $node_ids
-                    RETURN source as start_node, target as end_node, r as rel, type(r) as rel_type
-                    LIMIT $edge_limit
+                    # Modified query to return nodes and relationships separately
+                    edge_query = f"""
+                    MATCH (source:base)
+                    WHERE source.entity_id IN $node_ids
+                    MATCH path = (source)-[r*1..{max_depth}]-(target:base)
+                    UNWIND relationships(path) as rel
+                    RETURN startNode(rel) as start_node, endNode(rel) as end_node, rel, type(rel) as rel_type, elementId(rel) as rel_id
+                    LIMIT {max_nodes * 5}
                     """
                     
-                    edge_limit = max_nodes * 10  # Increase limit to ensure we get more edges
-                    utils.logger.debug(f"Executing Cypher query in get_knowledge_graph (edges): {edge_query} with params: node_ids={len(node_ids)} nodes, edge_limit={edge_limit}")
-                    edge_result = await session.run(edge_query, node_ids=node_ids, edge_limit=edge_limit)
+                    utils.logger.debug(f"Executing Cypher query in get_knowledge_graph (edges): {edge_query} with params: {{'node_ids': {node_ids}}}")
+                    edge_result = await session.run(edge_query, node_ids=node_ids)
                     
                     seen_edges = set()
                     async for record in edge_result:
@@ -2291,26 +2283,19 @@ class Neo4JStorage(BaseGraphStorage):
                         end_node = record["end_node"]
                         rel = record["rel"]
                         rel_type = record["rel_type"]
+                        rel_id = record["rel_id"]  # Neo4j internal relationship ID
                         
-                        if start_node and end_node:
+                        if start_node and end_node and rel_id:
                             rel_source = start_node.get("entity_id")
                             rel_target = end_node.get("entity_id")
                             
-                            # Double-check that both source and target are in our node set
-                            # This provides extra safety against validation errors
-                            if rel_source and rel_target and rel_source in node_ids and rel_target in node_ids:
-                                # Create unique edge key to avoid duplicates
-                                edge_key = tuple(sorted([rel_source, rel_target, rel_type]))
-                                
-                                if edge_key not in seen_edges:
-                                    seen_edges.add(edge_key)
+                            if rel_source and rel_target:
+                                # Use Neo4j internal relationship ID to ensure true uniqueness
+                                if rel_id not in seen_edges:
+                                    seen_edges.add(rel_id)
                                     
                                     # Get relationship properties
                                     props = dict(rel) if rel else {}
-                                    
-                                    # Clean escaped quotes from original_type (fix for frontend visualization)
-                                    if "original_type" in props and props["original_type"]:
-                                        props["original_type"] = props["original_type"].strip().strip('"').strip("'")
                                     
                                     # Ensure numeric edge weight
                                     edge_weight = 1.0
@@ -2328,12 +2313,13 @@ class Neo4JStorage(BaseGraphStorage):
                                     result.edges.append(KnowledgeGraphEdge(
                                         source=rel_source,
                                         target=rel_target,
-                                        id=f"{rel_source}_{rel_target}_{rel_type}",
+                                        id=rel_id,  # Use Neo4j's unique relationship ID
                                         type=rel_type,
                                         properties={
                                             "relationship_type": rel_type,
                                             "weight": edge_weight,        # Ensures it's always a valid float
                                             "description": props.get("description", f"Relationship between {rel_source} and {rel_target}"),
+                                            "neo4j_id": rel_id,  # Keep the Neo4j ID for reference
                                             **{k: v for k, v in props.items() 
                                               if k not in ["weight", "description"]}
                                         },

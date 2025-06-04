@@ -39,8 +39,10 @@ For each pair of related entities, extract the following information:
 - source_entity: name of the source entity, as identified in step 1
 - target_entity: name of the target entity, as identified in step 1
 - relationship_description: explanation as to why you think the source entity and the target entity are related to each other
-- relationship_type: Choose the most appropriate relationship type from the following list. If none fit exactly, choose "related". **For multi-word relationship types, use underscores to separate words (e.g., 'created_by', 'integrates_with', 'calls_api')**:
+- relationship_type: Choose the most appropriate relationship type from the following list. If none fit exactly, choose "related":
   {relationship_types}
+  
+  **IMPORTANT: For multi-word relationship types, use underscores to separate words (e.g., 'created_by', 'integrates_with', 'calls_api'). Do not concatenate words without separators.**
   
   Examples of specific relationship types to prefer:
   {relationship_examples}
@@ -205,6 +207,8 @@ For each pair of related entities, extract the following information:
 - relationship_description: explanation as to why you think the source entity and the target entity are related to each other
 - relationship_type: Choose the most appropriate relationship type from the following list. If none fit exactly, choose "related":
   {relationship_types}
+  
+  **IMPORTANT: For multi-word relationship types, use underscores to separate words (e.g., 'created_by', 'integrates_with', 'calls_api'). Do not concatenate words without separators.**
 - relationship_strength: a numeric score indicating strength of the relationship between the source entity and target entity
 - relationship_keywords: one or more high-level key words that summarize the overarching nature of the relationship, focusing on concepts or themes rather than specific details
 Format each relationship as ("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_type>{tuple_delimiter}<relationship_keywords>{tuple_delimiter}<relationship_strength>)

@@ -16,63 +16,63 @@ from ...utils import logger
 
 def standardize_relationship_type(rel_type: str) -> str:
     """
-    Enhanced conversion of a relationship type string to Neo4j standard format.
-    
-    This function handles various input formats including:
-    - CamelCase/PascalCase (e.g., "createdBy" -> "CREATED_BY") 
-    - Space-separated (e.g., "created by" -> "CREATED_BY")
-    - Hyphen-separated (e.g., "created-by" -> "CREATED_BY")
-    - Already underscored (e.g., "created_by" -> "CREATED_BY")
-    - Mixed formats and special characters
+    Convert a relationship type string to Neo4j standard format with comprehensive standardization.
+    This function handles various input formats including CamelCase, spaces, hyphens, and more.
     
     Args:
-        rel_type: Original relationship type string
+        rel_type: Original relationship type string (e.g., "integrates with", "createdBy", "IntegratesWith")
         
     Returns:
-        Standardized Neo4j relationship type (e.g., "CREATED_BY", "INTEGRATES_WITH")
+        Standardized relationship type (e.g., "INTEGRATES_WITH", "CREATED_BY", "INTEGRATES_WITH")
     """
-    # Step 1: Handle None or empty rel_type
+    # Handle None or empty input
     if not rel_type or not isinstance(rel_type, str):
         return "RELATED"
     
-    # Step 2: Strip whitespace (but don't convert case yet)
-    rel_type = rel_type.strip()
+    # Convert to lowercase for processing
+    processed_type = rel_type.strip().lower()
     
-    # Step 3: Handle CamelCase/PascalCase to snake_case conversion BEFORE lowercasing
-    # Only apply if no spaces or underscores are present (to avoid double processing)
-    if ' ' not in rel_type and '_' not in rel_type and '-' not in rel_type:
-        # Insert underscore before capital letters (for camelCase/PascalCase)
-        # This regex finds boundaries where a lowercase/digit is followed by uppercase
-        rel_type = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', rel_type)
-    
-    # Step 4: Now convert to lowercase
-    rel_type = rel_type.lower()
-    
-    # Step 5: Replace spaces and hyphens with underscores
-    rel_type = re.sub(r'[\s-]+', '_', rel_type)
-    
-    # Step 6: Remove any characters that are not alphanumeric or underscore
-    rel_type = re.sub(r'[^a-z0-9_]', '', rel_type)
-    
-    # Step 7: Collapse multiple underscores into one
-    rel_type = re.sub(r'_+', '_', rel_type)
-    
-    # Step 8: Remove leading/trailing underscores
-    rel_type = rel_type.strip('_')
-    
-    # Step 9: Check if result is empty after transformations
-    if not rel_type:
+    # Handle empty after stripping
+    if not processed_type:
         return "RELATED"
     
-    # Step 10: Convert to uppercase
-    result = rel_type.upper()
+    # Step 1: Handle CamelCase/PascalCase to snake_case
+    # Only apply camelCase conversion if:
+    # 1. No spaces or underscores are present
+    # 2. There are uppercase letters in the original string
+    # 3. The string is not already all uppercase
+    if ('_' not in rel_type and ' ' not in rel_type and 
+        any(c.isupper() for c in rel_type) and not rel_type.isupper()):
+        # Use regex to handle camelCase/PascalCase properly
+        # This handles consecutive capitals better (e.g., APICall -> API_Call -> api_call)
+        processed_type = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', rel_type)
+        processed_type = re.sub(r'([A-Z])([A-Z][a-z])', r'\1_\2', processed_type).lower()
     
-    # Step 11: Truncate if too long for Neo4j (identifier length limit)
+    # Step 2: Replace spaces and hyphens with underscores
+    processed_type = re.sub(r'[\s-]+', '_', processed_type)
+    
+    # Step 3: Remove any characters that are not alphanumeric or underscore
+    processed_type = re.sub(r'[^a-z0-9_]', '', processed_type)
+    
+    # Step 4: Collapse multiple underscores into one
+    processed_type = re.sub(r'_+', '_', processed_type)
+    
+    # Step 5: Remove leading/trailing underscores
+    processed_type = processed_type.strip('_')
+    
+    # Step 6: Check if result is empty after transformations
+    if not processed_type:
+        return "RELATED"
+    
+    # Step 7: Convert to uppercase
+    result = processed_type.upper()
+    
+    # Step 8: Truncate if too long for Neo4j (limit to 50 characters)
     if len(result) > 50:
         result = result[:50]
-        # Ensure we don't end with an underscore after truncation
+        # Remove trailing underscore if truncation created one
         result = result.rstrip('_')
-        
+    
     return result
 
 
@@ -361,13 +361,12 @@ class RelationshipTypeRegistry:
             "has": "CONTAINS"
         }
 
-        # Populate the registry with Neo4j types using the enhanced standardization function
+        # Populate the registry with Neo4j types and additional metadata
         for rel_type in relationship_types:
-            # Convert to lowercase for registry keys (human-readable format)
+            # Convert to lowercase for registry keys (human-readable version)
             original_type = rel_type.lower().replace('_', ' ')
             
-            # Use the enhanced standardize_relationship_type to generate neo4j_type
-            # This ensures consistency and proper formatting
+            # Generate Neo4j type using the enhanced standardization function
             neo4j_type = standardize_relationship_type(original_type)
             
             # Add to registry with metadata
@@ -378,26 +377,30 @@ class RelationshipTypeRegistry:
                 "inverse": None
             }
         
-        # Add common variants using enhanced standardization
-        for variant, standard_neo4j in common_variants.items():
+        # Add common variants
+        for variant, standard in common_variants.items():
             if variant not in self.registry:
-                # Convert the standard Neo4j type back to human-readable for registry key lookup
-                standard_key = standard_neo4j.lower().replace('_', ' ')
+                # Generate standardized Neo4j type for the variant using enhanced function
+                variant_neo4j_type = standardize_relationship_type(variant)
                 
-                # Use the enhanced standardize_relationship_type to ensure consistency
-                neo4j_type = standardize_relationship_type(variant)
-                
-                # If the variant doesn't standardize to the expected type, use the predefined mapping
-                if neo4j_type != standard_neo4j:
-                    neo4j_type = standard_neo4j
-                
-                # Create registry entry for the variant
-                self.registry[variant] = {
-                    "neo4j_type": neo4j_type,
-                    "description": f"Variant of {standard_key}: {variant}",
-                    "bidirectional": self.registry.get(standard_key, {}).get("bidirectional", False),
-                    "inverse": self.registry.get(standard_key, {}).get("inverse", None)
-                }
+                # Find the standardized form in our registry for metadata consistency
+                standard_key = standard.lower().replace('_', ' ')
+                if standard_key in self.registry:
+                    # Use consistent metadata structure
+                    self.registry[variant] = {
+                        "neo4j_type": variant_neo4j_type,
+                        "description": f"Variant of {standard_key}: {variant}",
+                        "bidirectional": self.registry[standard_key].get("bidirectional", False),
+                        "inverse": self.registry[standard_key].get("inverse", None)
+                    }
+                else:
+                    # Fallback if standard key is not found
+                    self.registry[variant] = {
+                        "neo4j_type": variant_neo4j_type,
+                        "description": f"Relationship variant: {variant}",
+                        "bidirectional": False,
+                        "inverse": None
+                    }
         
         # Define explicit bidirectional relationships and inverses
         inverse_pairs = [
@@ -897,3 +900,61 @@ class RelationshipTypeRegistry:
         }
         
         return categories.get(category.lower(), [])
+
+def _test_standardize_relationship_type():
+    """
+    Unit tests for the enhanced standardize_relationship_type function.
+    These tests validate the comprehensive standardization logic for various input formats.
+    """
+    test_cases = [
+        # Test cases from PRD section 9
+        ("created by", "CREATED_BY"),
+        ("integrates_with", "INTEGRATES_WITH"),
+        ("createdby", "CREATEDBY"),  # Single word, no camelCase
+        ("IntegratesWith", "INTEGRATES_WITH"),  # PascalCase
+        ("calls-api", "CALLS_API"),  # Hyphenated
+        ("  leading and trailing spaces  ", "LEADING_AND_TRAILING_SPACES"),
+        ("special!@#chars", "SPECIALCHARS"),  # Special characters removed
+        ("RELATED", "RELATED"),  # Already uppercase
+        ("", "RELATED"),  # Empty string
+        (None, "RELATED"),  # None input
+        
+        # Additional test cases for comprehensive coverage
+        ("camelCaseExample", "CAMEL_CASE_EXAMPLE"),  # camelCase
+        ("API_Call", "API_CALL"),  # Mixed case with underscore
+        ("multiple   spaces", "MULTIPLE_SPACES"),  # Multiple spaces
+        ("hyphens-and-underscores_mixed", "HYPHENS_AND_UNDERSCORES_MIXED"),
+        ("123numbers456", "123NUMBERS456"),  # Numbers
+        ("api-call_with-mixed_separators", "API_CALL_WITH_MIXED_SEPARATORS"),
+        ("___multiple___underscores___", "MULTIPLE_UNDERSCORES"),  # Multiple underscores
+        ("CamelCaseWithNumbers123", "CAMEL_CASE_WITH_NUMBERS123"),
+        ("a" * 60, "A" * 50),  # Truncation test (should be limited to 50 chars)
+        ("   ", "RELATED"),  # Only whitespace
+        ("APICall", "API_CALL"),  # Consecutive capitals
+    ]
+    
+    print("Testing standardize_relationship_type function...")
+    
+    passed = 0
+    failed = 0
+    
+    for input_val, expected in test_cases:
+        try:
+            result = standardize_relationship_type(input_val)
+            if result == expected:
+                print(f"✓ PASS: '{input_val}' -> '{result}'")
+                passed += 1
+            else:
+                print(f"✗ FAIL: '{input_val}' -> Expected: '{expected}', Got: '{result}'")
+                failed += 1
+        except Exception as e:
+            print(f"✗ ERROR: '{input_val}' -> Exception: {str(e)}")
+            failed += 1
+    
+    print(f"\nTest Results: {passed} passed, {failed} failed")
+    return failed == 0
+
+
+if __name__ == "__main__":
+    # Run tests when the module is executed directly
+    _test_standardize_relationship_type()

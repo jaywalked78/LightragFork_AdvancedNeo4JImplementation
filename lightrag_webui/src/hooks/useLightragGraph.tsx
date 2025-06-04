@@ -1,4 +1,4 @@
-import Graph, { UndirectedGraph } from 'graphology'
+import Graph, { MultiUndirectedGraph } from 'graphology'
 import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { errorMessage } from '@/lib/utils'
@@ -337,7 +337,7 @@ const createSigmaGraph = (rawGraph: RawGraph | null) => {
   }
 
   // Create new graph instance
-  const graph = new UndirectedGraph()
+  const graph = new MultiUndirectedGraph()
 
   // Add nodes from raw graph data
   for (const rawNode of rawGraph?.nodes ?? []) {
@@ -521,7 +521,7 @@ const useLightrangeGraph = () => {
         // Check if data is empty or invalid
         if (!data || !data.nodes || data.nodes.length === 0) {
           // Create a graph with a single "Graph Is Empty" node
-          const emptyGraph = new UndirectedGraph();
+          const emptyGraph = new MultiUndirectedGraph();
 
           // Add a single node with "Graph Is Empty" label
           emptyGraph.addNode('empty-graph-node', {
@@ -761,7 +761,7 @@ const useLightrangeGraph = () => {
 
         // Helper function to update node sizes
         const updateNodeSizes = (
-          sigmaGraph: UndirectedGraph,
+          sigmaGraph: MultiUndirectedGraph,
           nodesWithDiscardedEdges: Set<string>,
           minDegree: number,
           maxDegree: number
@@ -789,7 +789,7 @@ const useLightrangeGraph = () => {
 
         // Helper function to update edge sizes
         const updateEdgeSizes = (
-          sigmaGraph: UndirectedGraph,
+          sigmaGraph: MultiUndirectedGraph,
           minWeight: number,
           maxWeight: number
         ) => {
@@ -964,7 +964,7 @@ const useLightrangeGraph = () => {
   }, [nodeToExpand, sigmaGraph, rawGraph, t]);
 
   // Helper function to get all nodes that will be deleted
-  const getNodesThatWillBeDeleted = useCallback((nodeId: string, graph: UndirectedGraph) => {
+  const getNodesThatWillBeDeleted = useCallback((nodeId: string, graph: MultiUndirectedGraph) => {
     const nodesToDelete = new Set<string>([nodeId]);
 
     // Find all nodes that would become isolated after deletion
@@ -1092,7 +1092,7 @@ const useLightrangeGraph = () => {
 
     // If no graph exists yet, create a new one and store it
     console.log('Creating new Sigma graph instance')
-    const graph = new UndirectedGraph()
+    const graph = new MultiUndirectedGraph()
     useGraphStore.getState().setSigmaGraph(graph)
     return graph as Graph<NodeType, EdgeType>
   }, [sigmaGraph])
