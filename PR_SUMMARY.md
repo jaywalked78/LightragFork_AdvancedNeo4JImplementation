@@ -12,7 +12,7 @@ Entity C ---[related]---> Entity D
 
 ### After: Semantic relationship types with 100% preservation
 ```
-✅ Reddit Scrape To DB -[RUNS]-> n8n  
+✅ Reddit Scrape To DB -[RUNS]-> n8n
 ✅ SAIL POS -[STORES]-> SAIL POS Client Profile
 ✅ Google Gemini Chat Model -[INTEGRATES_WITH]-> n8n
 ✅ Debugging Cycle -[TROUBLESHOOTS]-> Runtime Errors

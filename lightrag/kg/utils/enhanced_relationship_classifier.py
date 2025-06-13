@@ -807,7 +807,7 @@ class EnhancedRelationshipClassifier:
         }
 
         for category, data in stats.items():
-            # category_metadata = self.categories.get(category, {})  # noqa: F841
+            # category_metadata = self.categories.get(category, {})  # Reserved for future use
             current_threshold = self.confidence_thresholds.get(category, 0.6)
 
             # Category-specific insights
