@@ -1,4 +1,4 @@
-import Graph, { UndirectedGraph } from 'graphology'
+import Graph, { MultiUndirectedGraph } from 'graphology'
 import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { errorMessage } from '@/lib/utils'
@@ -335,7 +335,7 @@ const createSigmaGraph = (rawGraph: RawGraph | null) => {
   }
 
   // Create new graph instance
-  const graph = new UndirectedGraph()
+  const graph = new MultiUndirectedGraph()
 
   // Add nodes from raw graph data
   for (const rawNode of rawGraph?.nodes ?? []) {
@@ -358,6 +358,12 @@ const createSigmaGraph = (rawGraph: RawGraph | null) => {
 
   // Add edges from raw graph data
   for (const rawEdge of rawGraph?.edges ?? []) {
+    // Skip if edge already exists (check both directions for undirected graph)
+    if (graph.hasEdge(rawEdge.source, rawEdge.target)) {
+      console.warn(`Edge already exists between ${rawEdge.source} and ${rawEdge.target}, skipping duplicate`);
+      continue;
+    }
+
     // Get weight from edge properties or default to 1
     const weight = rawEdge.properties?.weight !== undefined ? Number(rawEdge.properties.weight) : 1
 
@@ -433,7 +439,7 @@ const useLightrangeGraph = () => {
   // Track if a fetch is in progress to prevent multiple simultaneous fetches
   const fetchInProgressRef = useRef(false)
 
-  // Reset graph when query label is cleared
+  // Reset graph when query label is cleared  
   useEffect(() => {
     if (!queryLabel && (rawGraph !== null || sigmaGraph !== null)) {
       const state = useGraphStore.getState()
@@ -442,8 +448,9 @@ const useLightrangeGraph = () => {
       state.setLabelsFetchAttempted(false)
       dataLoadedRef.current = false
       initialLoadRef.current = false
+      emptyDataHandledRef.current = false
     }
-  }, [queryLabel, rawGraph, sigmaGraph])
+  }, [queryLabel])
 
   // Graph data fetching logic
   useEffect(() => {
@@ -457,9 +464,16 @@ const useLightrangeGraph = () => {
       return
     }
 
+    // If we already have graph data that matches the current query, don't refetch
+    const currentGraph = useGraphStore.getState()
+    if (currentGraph.sigmaGraph && currentGraph.lastSuccessfulQueryLabel === queryLabel && queryLabel) {
+      return
+    }
+
     // Only fetch data when graphDataFetchAttempted is false (avoids re-fetching on vite dev mode)
     // GraphDataFetchAttempted must set to false when queryLabel is changed
-    if (!isFetching && !useGraphStore.getState().graphDataFetchAttempted) {
+    const currentState = useGraphStore.getState()
+    if (!currentState.isFetching && !currentState.graphDataFetchAttempted) {
       // Set flags
       fetchInProgressRef.current = true
       useGraphStore.getState().setGraphDataFetchAttempted(true)
@@ -522,7 +536,7 @@ const useLightrangeGraph = () => {
           // Check if data is empty or invalid
           if (!data || !data.nodes || data.nodes.length === 0) {
             // Create a graph with a single "Graph Is Empty" node
-            const emptyGraph = new UndirectedGraph()
+            const emptyGraph = new MultiUndirectedGraph()
 
             // Add a single node with "Graph Is Empty" label
             emptyGraph.addNode('empty-graph-node', {
@@ -584,8 +598,8 @@ const useLightrangeGraph = () => {
           fetchInProgressRef.current = false
           state.setIsFetching(false)
 
-          // Mark empty data as handled if data is empty and query label is empty
-          if ((!data || !data.nodes || data.nodes.length === 0) && !currentQueryLabel) {
+          // Mark empty data as handled for all empty data cases
+          if (!data || !data.nodes || data.nodes.length === 0) {
             emptyDataHandledRef.current = true
           }
         })
@@ -601,7 +615,7 @@ const useLightrangeGraph = () => {
           state.setLastSuccessfulQueryLabel('') // Clear last successful query label on error
         })
     }
-  }, [queryLabel, maxQueryDepth, maxNodes, isFetching, t])
+  }, [queryLabel, maxQueryDepth, maxNodes, t])
 
   // Handle node expansion
   useEffect(() => {
@@ -772,7 +786,7 @@ const useLightrangeGraph = () => {
 
         // Helper function to update node sizes
         const updateNodeSizes = (
-          sigmaGraph: UndirectedGraph,
+          sigmaGraph: MultiUndirectedGraph,
           nodesWithDiscardedEdges: Set<string>,
           minDegree: number,
           maxDegree: number
@@ -800,7 +814,7 @@ const useLightrangeGraph = () => {
 
         // Helper function to update edge sizes
         const updateEdgeSizes = (
-          sigmaGraph: UndirectedGraph,
+          sigmaGraph: MultiUndirectedGraph,
           minWeight: number,
           maxWeight: number
         ) => {
@@ -984,7 +998,7 @@ const useLightrangeGraph = () => {
   }, [nodeToExpand, sigmaGraph, rawGraph, t])
 
   // Helper function to get all nodes that will be deleted
-  const getNodesThatWillBeDeleted = useCallback((nodeId: string, graph: UndirectedGraph) => {
+  const getNodesThatWillBeDeleted = useCallback((nodeId: string, graph: MultiUndirectedGraph) => {
     const nodesToDelete = new Set<string>([nodeId])
 
     // Find all nodes that would become isolated after deletion
@@ -1112,7 +1126,7 @@ const useLightrangeGraph = () => {
 
     // If no graph exists yet, create a new one and store it
     console.log('Creating new Sigma graph instance')
-    const graph = new UndirectedGraph()
+    const graph = new MultiUndirectedGraph()
     useGraphStore.getState().setSigmaGraph(graph)
     return graph as Graph<NodeType, EdgeType>
   }, [sigmaGraph])

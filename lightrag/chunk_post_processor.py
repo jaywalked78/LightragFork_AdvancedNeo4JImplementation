@@ -261,8 +261,14 @@ async def _post_process_chunk_relationships(
     Returns:
         defaultdict with validated relationships (same structure as input)
     """
+    logger.info(f"DEBUG: _post_process_chunk_relationships called for {chunk_key}")
+    
     # Check if chunk post-processing is enabled
-    if not global_config.get("enable_chunk_post_processing", False):
+    chunk_processing_enabled = global_config.get("enable_chunk_post_processing", False)
+    logger.info(f"DEBUG: Chunk post-processing enabled check: {chunk_processing_enabled}")
+    
+    if not chunk_processing_enabled:
+        logger.info(f"DEBUG: Chunk post-processing disabled, returning original edges")
         return maybe_edges
 
     # Check if there are relationships to process
@@ -326,7 +332,7 @@ async def _post_process_chunk_relationships(
             logger.info(
                 f"Chunk {chunk_key}: Checking post-processing cache for {total_relationships} relationships"
             )
-            logger.debug(f"DEBUG: cache_type=post_process, enable_cache={enable_cache}")
+            logger.info(f"DEBUG: Using cached LLM call - cache_type=post_process, enable_cache={enable_cache}")
             llm_response = await asyncio.wait_for(
                 use_llm_func_with_cache(
                     validation_prompt,
@@ -336,11 +342,14 @@ async def _post_process_chunk_relationships(
                 ),
                 timeout=timeout,
             )
+            logger.info(f"DEBUG: LLM response received for {chunk_key} (cached call)")
         else:
             # Direct LLM call without caching
+            logger.info(f"DEBUG: Using direct LLM call (no cache) for {chunk_key}")
             llm_response = await asyncio.wait_for(
                 llm_func(validation_prompt), timeout=timeout
             )
+            logger.info(f"DEBUG: LLM response received for {chunk_key} (direct call)")
 
         # Parse and validate LLM response
         cleaned_response = clean_llm_response(llm_response)
@@ -389,6 +398,7 @@ async def _post_process_chunk_relationships(
             summary = validation_result["summary"]
             logger.info(f"Chunk {chunk_key}: LLM summary - {summary}")
 
+        logger.info(f"DEBUG: Chunk post-processing completed successfully for {chunk_key}")
         return validated_edges
 
     except asyncio.TimeoutError:

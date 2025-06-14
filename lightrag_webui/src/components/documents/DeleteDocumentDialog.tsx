@@ -39,30 +39,24 @@ export default function DeleteDocumentDialog({
 
       if (result.status === 'success') {
         toast.success(
-          t('documentPanel.deleteDocument.success', {
-            fileName: document.file_path || document.id
-          })
+          `Document "${getDisplayFileName(document)}" deleted successfully`
         )
         onDocumentDeleted()
         onOpenChange(false)
       } else if (result.status === 'not_found') {
-        toast.warning(t('documentPanel.deleteDocument.notFound'))
+        toast.warning('Document not found')
         onDocumentDeleted() // Refresh the list since document doesn't exist
         onOpenChange(false)
       } else if (result.status === 'busy') {
-        toast.error(t('documentPanel.deleteDocument.busy'))
+        toast.error('Cannot delete document while pipeline is busy')
       } else {
         toast.error(
-          t('documentPanel.deleteDocument.error', {
-            error: result.message
-          })
+          `Failed to delete document: ${result.message}`
         )
       }
     } catch (error) {
       toast.error(
-        t('documentPanel.deleteDocument.error', {
-          error: errorMessage(error)
-        })
+        `Failed to delete document: ${errorMessage(error)}`
       )
     } finally {
       setIsDeleting(false)
@@ -81,57 +75,57 @@ export default function DeleteDocumentDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="overflow-hidden p-6 sm:max-w-[425px]">
-        <DialogHeader>
+      <DialogContent className="w-full max-w-md mx-auto p-0 overflow-hidden">
+        <DialogHeader className="p-6 pb-4">
           <DialogTitle className="flex items-center gap-2">
             <TrashIcon className="h-5 w-5 text-red-500" />
-            {t('documentPanel.deleteDocument.title')}
+            Delete Document
           </DialogTitle>
-          <DialogDescription>{t('documentPanel.deleteDocument.description')}</DialogDescription>
+          <DialogDescription>Are you sure you want to delete this document?</DialogDescription>
         </DialogHeader>
 
-        <div className="py-4">
-          <div className="overflow-hidden rounded-lg border bg-gray-50 p-4 dark:bg-gray-800">
-            <div className="space-y-2">
-              <div>
+        <div className="px-6 pb-4">
+          <div className="rounded-lg border bg-gray-50 p-4 dark:bg-gray-800">
+            <div className="space-y-3">
+              <div className="flex flex-col gap-1">
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {t('documentPanel.deleteDocument.fileName')}:
+                  File Name:
                 </span>
-                <span className="ml-2 font-mono text-sm break-all text-gray-900 dark:text-gray-100">
+                <span className="font-mono text-sm break-all text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700 p-2 rounded border">
                   {getDisplayFileName(document)}
                 </span>
               </div>
-              <div>
+              <div className="flex flex-col gap-1">
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {t('documentPanel.deleteDocument.documentId')}:
+                  Document ID:
                 </span>
-                <span className="ml-2 block max-w-full truncate font-mono text-sm text-gray-900 dark:text-gray-100">
+                <span className="font-mono text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700 p-2 rounded border break-all">
                   {document.id}
                 </span>
               </div>
-              <div>
+              <div className="flex flex-col gap-1">
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {t('documentPanel.deleteDocument.status')}:
+                  Status:
                 </span>
-                <span className="ml-2 text-sm">
+                <span className="text-sm">
                   {document.status === 'processed' && (
-                    <span className="text-green-600">
-                      {t('documentPanel.documentManager.status.completed')}
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                      Completed
                     </span>
                   )}
                   {document.status === 'processing' && (
-                    <span className="text-blue-600">
-                      {t('documentPanel.documentManager.status.processing')}
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                      Processing
                     </span>
                   )}
                   {document.status === 'pending' && (
-                    <span className="text-yellow-600">
-                      {t('documentPanel.documentManager.status.pending')}
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
+                      Pending
                     </span>
                   )}
                   {document.status === 'failed' && (
-                    <span className="text-red-600">
-                      {t('documentPanel.documentManager.status.failed')}
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
+                      Failed
                     </span>
                   )}
                 </span>
@@ -141,26 +135,25 @@ export default function DeleteDocumentDialog({
 
           <div className="mt-4 rounded-lg border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-700 dark:bg-yellow-900/20">
             <p className="text-sm text-yellow-800 dark:text-yellow-200">
-              <strong>{t('documentPanel.deleteDocument.warning')}:</strong>{' '}
-              {t('documentPanel.deleteDocument.warningText')}
+              <strong>Warning:</strong> This action will permanently delete the document and all associated data from the knowledge graph.
             </p>
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="p-6 pt-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isDeleting}>
-            {t('common.cancel')}
+            Cancel
           </Button>
           <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
             {isDeleting ? (
               <>
                 <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                {t('documentPanel.deleteDocument.deleting')}
+                Deleting...
               </>
             ) : (
               <>
                 <TrashIcon className="mr-2 h-4 w-4" />
-                {t('documentPanel.deleteDocument.confirm')}
+                Delete
               </>
             )}
           </Button>

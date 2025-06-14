@@ -109,8 +109,20 @@ class ContentSanitizer:
         # Remove path traversal attempts
         path = path.replace("..", "").replace("//", "/")
 
-        # Sanitize as text
+        # First sanitize as text (this handles encoding issues)
         path = ContentSanitizer.sanitize_text(path, max_length=1000)
+
+        # Then enforce filesystem filename limit (255 chars is typical max)
+        if len(path) > 255:
+            # Try to preserve the file extension
+            ext_idx = path.rfind('.')
+            if ext_idx > 0 and ext_idx > len(path) - 10:
+                ext = path[ext_idx:]
+                # Keep first part of filename and extension
+                path = path[:250 - len(ext)] + ext
+            else:
+                # No extension or very long extension, just truncate
+                path = path[:255]
 
         return path if path else "unknown_source"
 

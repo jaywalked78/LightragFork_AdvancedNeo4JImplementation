@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { createSelectors } from '@/lib/utils'
-import { DirectedGraph } from 'graphology'
+import { MultiUndirectedGraph } from 'graphology'
 import { getGraphLabels } from '@/api/lightrag'
 import MiniSearch from 'minisearch'
 
@@ -82,7 +82,7 @@ interface GraphState {
   focusedEdge: string | null
 
   rawGraph: RawGraph | null
-  sigmaGraph: DirectedGraph | null
+  sigmaGraph: MultiUndirectedGraph | null
   sigmaInstance: any | null
   allDatabaseLabels: string[]
 
@@ -112,7 +112,7 @@ interface GraphState {
   setLastSuccessfulQueryLabel: (label: string) => void
 
   setRawGraph: (rawGraph: RawGraph | null) => void
-  setSigmaGraph: (sigmaGraph: DirectedGraph | null) => void
+  setSigmaGraph: (sigmaGraph: MultiUndirectedGraph | null) => void
   setAllDatabaseLabels: (labels: string[]) => void
   fetchAllDatabaseLabels: () => Promise<void>
   setIsFetching: (isFetching: boolean) => void
@@ -213,7 +213,7 @@ const useGraphStoreBase = create<GraphState>()((set, get) => ({
       rawGraph
     }),
 
-  setSigmaGraph: (sigmaGraph: DirectedGraph | null) => {
+  setSigmaGraph: (sigmaGraph: MultiUndirectedGraph | null) => {
     // Replace graph instance, no need to keep WebGL context
     set({ sigmaGraph })
   },

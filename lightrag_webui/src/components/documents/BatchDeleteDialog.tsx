@@ -36,7 +36,7 @@ export default function BatchDeleteDialog({
 
   const handleDelete = async () => {
     if (confirmationText !== 'DELETE') {
-      toast.error(t('documentPanel.batchDelete.confirmationError'))
+      toast.error('Please type "DELETE" to confirm this action')
       return
     }
 
@@ -55,23 +55,15 @@ export default function BatchDeleteDialog({
 
       if (result.overall_status === 'success') {
         toast.success(
-          t('documentPanel.batchDelete.success', {
-            count: result.deleted_count
-          })
+          `Successfully deleted ${result.deleted_count} documents`
         )
       } else if (result.overall_status === 'partial_success') {
         toast.warning(
-          t('documentPanel.batchDelete.partialSuccess', {
-            deleted: result.deleted_count,
-            total: documents.length,
-            failed: result.failed_count
-          })
+          `Partially successful: ${result.deleted_count}/${documents.length} documents deleted, ${result.failed_count} failed`
         )
       } else {
         toast.error(
-          t('documentPanel.batchDelete.failure', {
-            message: result.message
-          })
+          `Failed to delete documents: ${result.message}`
         )
       }
 
@@ -85,9 +77,7 @@ export default function BatchDeleteDialog({
         if (failedDocs.length > 0) {
           const more = result.failed_count > 3 ? ` (+${result.failed_count - 3} more)` : ''
           toast.error(
-            t('documentPanel.batchDelete.failedDocs', {
-              docs: failedDocs.join(', ') + more
-            })
+            `Failed to delete: ${failedDocs.join(', ')}${more}`
           )
         }
       }
@@ -96,9 +86,7 @@ export default function BatchDeleteDialog({
       onOpenChange(false)
     } catch (error) {
       toast.error(
-        t('documentPanel.batchDelete.error', {
-          error: errorMessage(error)
-        })
+        `Failed to delete documents: ${errorMessage(error)}`
       )
       setProgress(0)
     } finally {
@@ -123,10 +111,10 @@ export default function BatchDeleteDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <TrashIcon className="h-5 w-5 text-red-500" />
-            {t('documentPanel.batchDelete.title')}
+            Batch Delete Documents
           </DialogTitle>
           <DialogDescription>
-            {t('documentPanel.batchDelete.description', { count: documents.length })}
+            Are you sure you want to delete {documents.length} documents?
           </DialogDescription>
         </DialogHeader>
 
@@ -142,22 +130,22 @@ export default function BatchDeleteDialog({
                   <span className="text-xs text-gray-500">
                     {doc.status === 'processed' && (
                       <span className="text-green-600">
-                        {t('documentPanel.documentManager.status.completed')}
+                        Completed
                       </span>
                     )}
                     {doc.status === 'processing' && (
                       <span className="text-blue-600">
-                        {t('documentPanel.documentManager.status.processing')}
+                        Processing
                       </span>
                     )}
                     {doc.status === 'pending' && (
                       <span className="text-yellow-600">
-                        {t('documentPanel.documentManager.status.pending')}
+                        Pending
                       </span>
                     )}
                     {doc.status === 'failed' && (
                       <span className="text-red-600">
-                        {t('documentPanel.documentManager.status.failed')}
+                        Failed
                       </span>
                     )}
                   </span>
@@ -165,7 +153,7 @@ export default function BatchDeleteDialog({
               ))}
               {documents.length > 5 && (
                 <div className="text-sm text-gray-500 italic">
-                  {t('documentPanel.batchDelete.andMore', { count: documents.length - 5 })}
+                  And {documents.length - 5} more documents...
                 </div>
               )}
             </div>
@@ -177,10 +165,10 @@ export default function BatchDeleteDialog({
               <AlertTriangleIcon className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600 dark:text-red-400" />
               <div className="space-y-1">
                 <p className="text-sm font-medium text-red-800 dark:text-red-200">
-                  {t('documentPanel.batchDelete.warning')}
+                  Warning
                 </p>
                 <p className="text-sm text-red-700 dark:text-red-300">
-                  {t('documentPanel.batchDelete.warningText')}
+                  This action will permanently delete all selected documents and their associated data from the knowledge graph. This cannot be undone.
                 </p>
               </div>
             </div>
@@ -189,7 +177,7 @@ export default function BatchDeleteDialog({
           {/* Confirmation Input */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-              {t('documentPanel.batchDelete.confirmationLabel')}
+              Type "DELETE" to confirm this action:
             </label>
             <Input
               type="text"
@@ -200,7 +188,7 @@ export default function BatchDeleteDialog({
               className={confirmationText && !isConfirmationValid ? 'border-red-300' : ''}
             />
             <p className="text-xs text-gray-500">
-              {t('documentPanel.batchDelete.confirmationHint')}
+              You must type DELETE exactly to confirm the batch deletion.
             </p>
           </div>
 
@@ -208,7 +196,7 @@ export default function BatchDeleteDialog({
           {isDeleting && (
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
-                <span>{t('documentPanel.batchDelete.deleting')}</span>
+                <span>Deleting documents...</span>
                 <span>{Math.round(progress)}%</span>
               </div>
               <Progress value={progress} className="w-full" />
@@ -218,7 +206,7 @@ export default function BatchDeleteDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isDeleting}>
-            {t('common.cancel')}
+            Cancel
           </Button>
           <Button
             variant="destructive"
@@ -228,12 +216,12 @@ export default function BatchDeleteDialog({
             {isDeleting ? (
               <>
                 <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                {t('documentPanel.batchDelete.deleting')}
+                Deleting...
               </>
             ) : (
               <>
                 <TrashIcon className="mr-2 h-4 w-4" />
-                {t('documentPanel.batchDelete.confirm', { count: documents.length })}
+                Delete {documents.length} Documents
               </>
             )}
           </Button>
