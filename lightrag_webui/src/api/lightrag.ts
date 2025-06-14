@@ -597,6 +597,49 @@ export const loginToServer = async (username: string, password: string): Promise
   return response.data
 }
 
+export type DeleteDocumentResponse = {
+  status: 'success' | 'not_found' | 'busy' | 'error'
+  message: string
+}
+
+export type BatchDeleteRequest = {
+  doc_id: string
+  file_name: string
+}
+
+export type BatchDeleteResult = {
+  doc_id: string
+  status: 'success' | 'not_found' | 'busy' | 'error'
+  message: string
+}
+
+export type BatchDeleteResponse = {
+  overall_status: 'success' | 'partial_success' | 'failure'
+  message: string
+  deleted_count: number
+  failed_count: number
+  results: BatchDeleteResult[]
+}
+
+export const deleteDocument = async (
+  docId: string,
+  filePath: string
+): Promise<DeleteDocumentResponse> => {
+  const response = await axiosInstance.delete(`/documents/${encodeURIComponent(docId)}`, {
+    data: { file_name: filePath }
+  })
+  return response.data
+}
+
+export const deleteDocumentsBatch = async (
+  documents: BatchDeleteRequest[]
+): Promise<BatchDeleteResponse> => {
+  const response = await axiosInstance.delete('/documents/batch', {
+    data: { documents }
+  })
+  return response.data
+}
+
 /**
  * Updates an entity's properties in the knowledge graph
  * @param entityName The name of the entity to update

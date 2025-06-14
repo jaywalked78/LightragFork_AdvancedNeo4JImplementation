@@ -229,3 +229,223 @@ INFO: Chunk chunk-2bb294dd835b1446ee859a654f7f3189: Kept 18, Modified 2, Removed
 - Different hash values for input check vs. result storage are normal operation
 - Cache hits should show identical relationship counts and processing results
 - Diagnostic logging confirms cache availability and configuration status
+
+---
+
+## Critical Implementation Fixes Required for Production
+
+**⚠️ IMPORTANT:** The original implementation had several critical issues that prevented chunk post-processing from working. The following fixes are REQUIRED for proper functionality:
+
+### 7. Fix #1: Embedding Function Routing in `lightrag_server.py` (lines ~300-342)
+
+**Issue:** When using VoyageAI embeddings with `EMBEDDING_BINDING=anthropic`, the system was incorrectly calling `openai_embed()` which caused errors with `encoding_format="float"` parameter that VoyageAI doesn't support.
+
+**Root Cause:** Complex nested ternary operators in embedding function selection were causing fallthrough to `openai_embed` even when `anthropic` binding was specified.
+
+**Fix:** Replace nested conditionals with clean async function:
+```python
+# Create the embedding function based on binding
+async def get_embedding_func(texts):
+    if args.embedding_binding == "lollms":
+        return await lollms_embed(
+            texts,
+            embed_model=args.embedding_model,
+            host=args.embedding_binding_host,
+            api_key=args.embedding_binding_api_key,
+        )
+    elif args.embedding_binding == "ollama":
+        return await ollama_embed(
+            texts,
+            embed_model=args.embedding_model,
+            host=args.embedding_binding_host,
+            api_key=args.embedding_binding_api_key,
+        )
+    elif args.embedding_binding == "azure_openai":
+        return await azure_openai_embed(
+            texts,
+            model=args.embedding_model,
+            api_key=args.embedding_binding_api_key,
+        )
+    elif args.embedding_binding == "anthropic":
+        print(f"DEBUG: Using anthropic_embed with model={args.embedding_model}, base_url={args.embedding_binding_host}")
+        return await anthropic_embed(
+            texts,
+            model=args.embedding_model,
+            base_url=args.embedding_binding_host,
+            api_key=args.embedding_binding_api_key,
+        )
+    else:
+        return await openai_embed(
+            texts,
+            model=args.embedding_model,
+            base_url=args.embedding_binding_host,
+            api_key=args.embedding_binding_api_key,
+        )
+
+embedding_func = EmbeddingFunc(
+    embedding_dim=args.embedding_dim,
+    max_token_size=args.max_embed_tokens,
+    func=get_embedding_func,
+)
+```
+
+### 8. Fix #2: Remove Invalid BaseLLM Import in `anthropic.py` (lines ~41-43)
+
+**Issue:** Import error preventing server startup:
+```
+ImportError: cannot import name 'BaseLLM' from 'lightrag.base'
+```
+
+**Fix:** Remove non-existent import and inheritance:
+```python
+# REMOVE these lines:
+from ..base import BaseLLM  # Import the base class
+
+# CHANGE this:
+class AnthropicLLM(BaseLLM):
+# TO this:
+class AnthropicLLM:
+```
+
+### 9. Fix #3: Missing Configuration in `lightrag.py` (lines ~1187-1207)
+
+**Issue:** `global_config` passed to `extract_entities()` didn't include chunk post-processing environment variables, causing `enable_chunk_post_processing` to always be `False` inside the chunk processor.
+
+**Root Cause:** `asdict(self)` only includes LightRAG class attributes, not environment variables.
+
+**Fix:** Explicitly read environment configuration:
+```python
+# REPLACE:
+chunk_results = await extract_entities(
+    chunk,
+    global_config=asdict(self),
+    pipeline_status=pipeline_status,
+    pipeline_status_lock=pipeline_status_lock,
+    llm_response_cache=self.llm_response_cache,
+)
+
+# WITH:
+# Create global_config with chunk post-processing settings
+global_config = asdict(self)
+# Add missing chunk post-processing configuration from environment
+from .constants import DEFAULT_ENABLE_CHUNK_POST_PROCESSING
+from .api.config import get_env_value
+global_config["enable_chunk_post_processing"] = get_env_value(
+    "ENABLE_CHUNK_POST_PROCESSING", DEFAULT_ENABLE_CHUNK_POST_PROCESSING, bool
+)
+global_config["enable_llm_cache_for_post_process"] = get_env_value(
+    "ENABLE_LLM_CACHE_FOR_POST_PROCESS", True, bool
+)
+global_config["log_validation_changes"] = get_env_value(
+    "LOG_VALIDATION_CHANGES", False, bool
+)
+global_config["chunk_validation_batch_size"] = get_env_value(
+    "CHUNK_VALIDATION_BATCH_SIZE", 50, int
+)
+global_config["chunk_validation_timeout"] = get_env_value(
+    "CHUNK_VALIDATION_TIMEOUT", 30, int
+)
+
+chunk_results = await extract_entities(
+    chunk,
+    global_config=global_config,
+    pipeline_status=pipeline_status,
+    pipeline_status_lock=pipeline_status_lock,
+    llm_response_cache=self.llm_response_cache,
+)
+```
+
+### 10. Fix #4: Enhanced Cache Logging in `utils.py` (lines ~1574-1584)
+
+**Issue:** Cache hit/miss for chunk post-processing was only logged at DEBUG level, making it invisible in production.
+
+**Fix:** Add INFO-level logging for post-processing cache operations:
+```python
+# REPLACE:
+if cached_return:
+    logger.debug(f"Found cache for {arg_hash}")
+    statistic_data["llm_cache"] += 1
+    return cached_return
+statistic_data["llm_call"] += 1
+
+# WITH:
+if cached_return:
+    if cache_type == "post_process":
+        logger.info(f"Cache HIT for chunk post-processing: {arg_hash}")
+    else:
+        logger.debug(f"Found cache for {arg_hash}")
+    statistic_data["llm_cache"] += 1
+    return cached_return
+
+# Cache miss - log for post-processing
+if cache_type == "post_process":
+    logger.info(f"Cache MISS for chunk post-processing: {arg_hash} - Processing with LLM")
+
+statistic_data["llm_call"] += 1
+```
+
+### 11. Additional Debug Logging in `chunk_post_processor.py`
+
+**Issue:** Insufficient visibility into chunk post-processing execution flow.
+
+**Fix:** Add comprehensive debug logging:
+```python
+# At function entry (line ~264):
+logger.info(f"DEBUG: _post_process_chunk_relationships called for {chunk_key}")
+
+# Configuration check (lines ~267-272):
+chunk_processing_enabled = global_config.get("enable_chunk_post_processing", False)
+logger.info(f"DEBUG: Chunk post-processing enabled check: {chunk_processing_enabled}")
+
+if not chunk_processing_enabled:
+    logger.info(f"DEBUG: Chunk post-processing disabled, returning original edges")
+    return maybe_edges
+
+# Cache operation logging (lines ~335, 348-352):
+logger.info(f"DEBUG: Using cached LLM call - cache_type=post_process, enable_cache={enable_cache}")
+# ... after LLM call:
+logger.info(f"DEBUG: LLM response received for {chunk_key} (cached call)")
+
+# Completion logging (line ~401):
+logger.info(f"DEBUG: Chunk post-processing completed successfully for {chunk_key}")
+```
+
+## Symptoms of These Issues
+
+Without these fixes, you would observe:
+
+1. **Embedding Error**: `Error code: 400 - Value 'float' supplied for argument 'encoding_format' is not valid`
+2. **Import Error**: `ImportError: cannot import name 'BaseLLM'`
+3. **Silent Failure**: `DEBUG: Chunk post-processing enabled check: False` (even with `ENABLE_CHUNK_POST_PROCESSING=true`)
+4. **No Cache Visibility**: Missing cache HIT/MISS logging in production
+
+## Implementation Testing
+
+To verify fixes are working, look for this log sequence:
+
+```
+INFO: DEBUG: Chunk post-processing enabled check: True
+INFO: Chunk chunk-xxx: Validating 12 relationships
+INFO: Cache MISS for chunk post-processing: [hash] - Processing with LLM  # First run
+INFO: Cache HIT for chunk post-processing: [hash]                         # Subsequent runs
+INFO: Chunk chunk-xxx: Kept 4, Modified 1, Removed 7
+```
+
+## Environment Configuration Required
+
+```bash
+# .env file - ALL required for proper operation:
+EMBEDDING_BINDING=anthropic
+EMBEDDING_MODEL=voyage-3-large
+EMBEDDING_BINDING_HOST=https://api.voyageai.com/v1
+EMBEDDING_DIM=1024
+VOYAGE_API_KEY=your_voyage_api_key
+
+ENABLE_CHUNK_POST_PROCESSING=true
+ENABLE_LLM_CACHE_FOR_POST_PROCESS=true
+LOG_VALIDATION_CHANGES=true
+CHUNK_VALIDATION_BATCH_SIZE=999999
+CHUNK_VALIDATION_TIMEOUT=600
+```
+
+These fixes are ESSENTIAL for production deployment. Without them, chunk post-processing will either fail completely or operate with degraded functionality.

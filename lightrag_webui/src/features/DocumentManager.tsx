@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSettingsStore } from '@/stores/settings'
 import Button from '@/components/ui/Button'
+import Checkbox from '@/components/ui/Checkbox'
 import { cn } from '@/lib/utils'
 import {
   Table,
@@ -15,6 +16,8 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/com
 import EmptyCard from '@/components/ui/EmptyCard'
 import UploadDocumentsDialog from '@/components/documents/UploadDocumentsDialog'
 import ClearDocumentsDialog from '@/components/documents/ClearDocumentsDialog'
+import DeleteDocumentDialog from '@/components/documents/DeleteDocumentDialog'
+import BatchDeleteDialog from '@/components/documents/BatchDeleteDialog'
 
 import {
   getDocuments,
@@ -27,7 +30,7 @@ import { errorMessage } from '@/lib/utils'
 import { toast } from 'sonner'
 import { useBackendState } from '@/stores/state'
 
-import { RefreshCwIcon, ActivityIcon, ArrowUpIcon, ArrowDownIcon, FilterIcon } from 'lucide-react'
+import { RefreshCwIcon, ActivityIcon, ArrowUpIcon, ArrowDownIcon, FilterIcon, TrashIcon } from 'lucide-react'
 import PipelineStatusDialog from '@/components/documents/PipelineStatusDialog'
 
 type StatusFilter = DocStatus | 'all'
@@ -175,6 +178,12 @@ export default function DocumentManager() {
 
   // State for document status filter
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+
+  // State for deletion dialogs
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [batchDeleteDialogOpen, setBatchDeleteDialogOpen] = useState(false)
+  const [documentToDelete, setDocumentToDelete] = useState<DocStatusWithStatus | null>(null)
+  const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
 
   // Handle sort column click
   const handleSort = (field: SortField) => {
@@ -481,6 +490,67 @@ export default function DocumentManager() {
     // This effect ensures the component re-renders when sort state changes
   }, [sortField, sortDirection])
 
+  // Handlers for deletion actions
+  const handleDeleteDocument = (document: DocStatusWithStatus) => {
+    setDocumentToDelete(document)
+    setDeleteDialogOpen(true)
+  }
+
+  const handleDocumentDeleted = () => {
+    fetchDocuments()
+    
+    // Remove the deleted document from selected documents if it was selected
+    if (documentToDelete && selectedDocuments.has(documentToDelete.id)) {
+      const newSelection = new Set(selectedDocuments)
+      newSelection.delete(documentToDelete.id)
+      setSelectedDocuments(newSelection)
+    }
+    
+    setDocumentToDelete(null)
+  }
+
+  const handleToggleSelection = (docId: string) => {
+    const newSelection = new Set(selectedDocuments)
+    if (newSelection.has(docId)) {
+      newSelection.delete(docId)
+    } else {
+      newSelection.add(docId)
+    }
+    setSelectedDocuments(newSelection)
+  }
+
+  const handleSelectAll = () => {
+    if (!filteredAndSortedDocs) return
+    
+    const allVisible = filteredAndSortedDocs.every(doc => selectedDocuments.has(doc.id))
+    if (allVisible) {
+      // Deselect all visible documents
+      const newSelection = new Set(selectedDocuments)
+      filteredAndSortedDocs.forEach(doc => newSelection.delete(doc.id))
+      setSelectedDocuments(newSelection)
+    } else {
+      // Select all visible documents
+      const newSelection = new Set(selectedDocuments)
+      filteredAndSortedDocs.forEach(doc => newSelection.add(doc.id))
+      setSelectedDocuments(newSelection)
+    }
+  }
+
+  const handleBatchDelete = () => {
+    if (!filteredAndSortedDocs || selectedDocuments.size === 0) return
+    setBatchDeleteDialogOpen(true)
+  }
+
+  const handleBatchDeleteComplete = () => {
+    setSelectedDocuments(new Set())
+    fetchDocuments()
+  }
+
+  const getSelectedDocuments = () => {
+    if (!filteredAndSortedDocs) return []
+    return filteredAndSortedDocs.filter(doc => selectedDocuments.has(doc.id))
+  }
+
   return (
     <Card className="flex h-full min-h-0 flex-col !overflow-hidden !rounded-none">
       <CardHeader className="px-6 py-2">
@@ -510,6 +580,18 @@ export default function DocumentManager() {
             </Button>
           </div>
           <div className="flex-1" />
+          {selectedDocuments.size > 0 && (
+            <Button
+              variant="destructive"
+              onClick={handleBatchDelete}
+              side="bottom"
+              tooltip={`Delete ${selectedDocuments.size} selected documents`}
+              size="sm"
+            >
+              <TrashIcon className="h-4 w-4" />
+              Batch Delete ({selectedDocuments.size})
+            </Button>
+          )}
           <ClearDocumentsDialog onDocumentsCleared={fetchDocuments} />
           <UploadDocumentsDialog onDocumentsUploaded={fetchDocuments} />
           <PipelineStatusDialog open={showPipelineStatus} onOpenChange={setShowPipelineStatus} />
@@ -624,6 +706,13 @@ export default function DocumentManager() {
                   <Table className="w-full">
                     <TableHeader className="bg-background sticky top-0 z-10 shadow-sm">
                       <TableRow className="bg-card/95 supports-[backdrop-filter]:bg-card/75 border-b shadow-[inset_0_-1px_0_rgba(0,0,0,0.1)] backdrop-blur">
+                        <TableHead className="w-12">
+                          <Checkbox
+                            checked={filteredAndSortedDocs?.length > 0 && filteredAndSortedDocs.every(doc => selectedDocuments.has(doc.id))}
+                            onCheckedChange={handleSelectAll}
+                            className="h-4 w-4"
+                          />
+                        </TableHead>
                         <TableHead
                           onClick={() => handleSort('id')}
                           className="cursor-pointer select-none hover:bg-gray-200 dark:hover:bg-gray-800"
@@ -679,12 +768,22 @@ export default function DocumentManager() {
                             )}
                           </div>
                         </TableHead>
+                        <TableHead className="w-16">
+                          Delete
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody className="overflow-auto text-sm">
                       {filteredAndSortedDocs &&
                         filteredAndSortedDocs.map((doc) => (
                           <TableRow key={doc.id}>
+                            <TableCell className="w-12">
+                              <Checkbox
+                                checked={selectedDocuments.has(doc.id)}
+                                onCheckedChange={() => handleToggleSelection(doc.id)}
+                                className="h-4 w-4"
+                              />
+                            </TableCell>
                             <TableCell className="max-w-[250px] truncate overflow-visible font-mono">
                               {showFileName ? (
                                 <>
@@ -748,6 +847,17 @@ export default function DocumentManager() {
                             <TableCell className="truncate">
                               {new Date(doc.updated_at).toLocaleString()}
                             </TableCell>
+                            <TableCell className="w-16">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteDocument(doc)}
+                                className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-600"
+                                title={t('documentPanel.deleteDocument.tooltip')}
+                              >
+                                <TrashIcon className="h-4 w-4" />
+                              </Button>
+                            </TableCell>
                           </TableRow>
                         ))}
                     </TableBody>
@@ -758,6 +868,21 @@ export default function DocumentManager() {
           </CardContent>
         </Card>
       </CardContent>
+
+      {/* Deletion Dialogs */}
+      <DeleteDocumentDialog
+        document={documentToDelete}
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        onDocumentDeleted={handleDocumentDeleted}
+      />
+      
+      <BatchDeleteDialog
+        documents={getSelectedDocuments()}
+        open={batchDeleteDialogOpen}
+        onOpenChange={setBatchDeleteDialogOpen}
+        onDocumentsDeleted={handleBatchDeleteComplete}
+      />
     </Card>
   )
 }

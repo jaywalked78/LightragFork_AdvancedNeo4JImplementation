@@ -50,21 +50,40 @@ const GraphControl = ({ disableHoverEffect }: { disableHoverEffect?: boolean }) 
    */
   useEffect(() => {
     if (sigmaGraph && sigma) {
-      // Ensure sigma binding to sigmaGraph
+      // Check if the graph is already bound to prevent unnecessary rebinding
       try {
-        if (typeof sigma.setGraph === 'function') {
-          sigma.setGraph(sigmaGraph as unknown as AbstractGraph<NodeType, EdgeType>)
-          console.log('Binding graph to sigma instance')
-        } else {
-          ;(sigma as any).graph = sigmaGraph
-          console.warn('Simgma missing setGraph function, set graph property directly')
+        const currentGraph = sigma.getGraph()
+        if (currentGraph !== sigmaGraph) {
+          // Only bind if the graph is different
+          if (typeof sigma.setGraph === 'function') {
+            sigma.setGraph(sigmaGraph as unknown as AbstractGraph<NodeType, EdgeType>)
+            console.log('Binding graph to sigma instance')
+          } else {
+            ;(sigma as any).graph = sigmaGraph
+            console.warn('Simgma missing setGraph function, set graph property directly')
+          }
+          
+          assignLayout()
+          console.log('Initial layout applied to graph')
         }
       } catch (error) {
         console.error('Error setting graph on sigma instance:', error)
+        // If error occurs, try to set the graph anyway
+        try {
+          if (typeof sigma.setGraph === 'function') {
+            sigma.setGraph(sigmaGraph as unknown as AbstractGraph<NodeType, EdgeType>)
+            console.log('Binding graph to sigma instance (after error)')
+          } else {
+            ;(sigma as any).graph = sigmaGraph
+            console.warn('Simgma missing setGraph function, set graph property directly (after error)')
+          }
+          
+          assignLayout()
+          console.log('Initial layout applied to graph (after error)')
+        } catch (secondError) {
+          console.error('Failed to set graph after retry:', secondError)
+        }
       }
-
-      assignLayout()
-      console.log('Initial layout applied to graph')
     }
   }, [sigma, sigmaGraph, assignLayout, maxIterations])
 

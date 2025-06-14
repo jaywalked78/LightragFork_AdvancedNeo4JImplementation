@@ -2240,9 +2240,13 @@ async def extract_entities(
                         pipeline_status["history_messages"].append(log_message)
 
                 # Apply chunk-level relationship post-processing if enabled
-                if global_config.get(
+                chunk_post_processing_enabled = global_config.get(
                     "enable_chunk_post_processing", DEFAULT_ENABLE_CHUNK_POST_PROCESSING
-                ):
+                )
+                logger.info(f"DEBUG: Chunk post-processing check - enabled: {chunk_post_processing_enabled}, chunk: {chunk_key}")
+                
+                if chunk_post_processing_enabled:
+                    logger.info(f"DEBUG: Starting chunk post-processing for {chunk_key} with {len(maybe_edges)} relationships")
                     try:
                         maybe_edges = await _post_process_chunk_relationships(
                             content,
@@ -2252,11 +2256,14 @@ async def extract_entities(
                             chunk_key,
                             global_config,
                         )
+                        logger.info(f"DEBUG: Chunk post-processing completed for {chunk_key}")
                     except Exception as e:
                         logger.warning(
                             f"Chunk post-processing failed for {chunk_key}: {e}"
                         )
                         logger.info("Continuing with original relationships")
+                else:
+                    logger.info(f"DEBUG: Chunk post-processing disabled for {chunk_key}")
 
                 # Return the extracted nodes and edges for centralized processing
                 return maybe_nodes, maybe_edges

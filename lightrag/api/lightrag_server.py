@@ -85,10 +85,11 @@ def create_app(args):
         "openai",
         "openai-ollama",
         "azure_openai",
+        "anthropic",
     ]:
         raise Exception("llm binding not supported")
 
-    if args.embedding_binding not in ["lollms", "ollama", "openai", "azure_openai"]:
+    if args.embedding_binding not in ["lollms", "ollama", "openai", "azure_openai", "anthropic"]:
         raise Exception("embedding binding not supported")
 
     # Set default hosts if not provided
@@ -211,6 +212,11 @@ def create_app(args):
             azure_openai_complete_if_cache,
             azure_openai_embed,
         )
+    if args.llm_binding == "anthropic" or args.embedding_binding == "anthropic":
+        from lightrag.llm.anthropic import (
+            anthropic_complete_if_cache,
+            anthropic_embed,
+        )
     if args.llm_binding_host == "openai-ollama" or args.embedding_binding == "ollama":
         from lightrag.llm.openai import openai_complete_if_cache
         from lightrag.llm.ollama import ollama_embed
@@ -262,41 +268,77 @@ def create_app(args):
             **kwargs,
         )
 
-    embedding_func = EmbeddingFunc(
-        embedding_dim=args.embedding_dim,
-        max_token_size=args.max_embed_tokens,
-        func=lambda texts: (
-            lollms_embed(
+    async def anthropic_model_complete(
+        prompt,
+        system_prompt=None,
+        history_messages=None,
+        keyword_extraction=False,
+        **kwargs,
+    ) -> str:
+        keyword_extraction = kwargs.pop("keyword_extraction", None)
+        if keyword_extraction:
+            kwargs["response_format"] = GPTKeywordExtractionFormat
+        if history_messages is None:
+            history_messages = []
+        kwargs["temperature"] = args.temperature
+        # Get the response stream from anthropic_complete_if_cache
+        response_stream = await anthropic_complete_if_cache(
+            args.llm_model,
+            prompt,
+            system_prompt=system_prompt,
+            history_messages=history_messages,
+            base_url=args.llm_binding_host,
+            api_key=args.llm_binding_api_key,
+            **kwargs,
+        )
+        # Consume the async iterator to get the full string
+        full_response = ""
+        async for chunk in response_stream:
+            full_response += chunk
+        return full_response
+
+    # Create the embedding function based on binding
+    async def get_embedding_func(texts):
+        if args.embedding_binding == "lollms":
+            return await lollms_embed(
                 texts,
                 embed_model=args.embedding_model,
                 host=args.embedding_binding_host,
                 api_key=args.embedding_binding_api_key,
             )
-            if args.embedding_binding == "lollms"
-            else (
-                ollama_embed(
-                    texts,
-                    embed_model=args.embedding_model,
-                    host=args.embedding_binding_host,
-                    api_key=args.embedding_binding_api_key,
-                )
-                if args.embedding_binding == "ollama"
-                else (
-                    azure_openai_embed(
-                        texts,
-                        model=args.embedding_model,  # no host is used for openai,
-                        api_key=args.embedding_binding_api_key,
-                    )
-                    if args.embedding_binding == "azure_openai"
-                    else openai_embed(
-                        texts,
-                        model=args.embedding_model,
-                        base_url=args.embedding_binding_host,
-                        api_key=args.embedding_binding_api_key,
-                    )
-                )
+        elif args.embedding_binding == "ollama":
+            return await ollama_embed(
+                texts,
+                embed_model=args.embedding_model,
+                host=args.embedding_binding_host,
+                api_key=args.embedding_binding_api_key,
             )
-        ),
+        elif args.embedding_binding == "azure_openai":
+            return await azure_openai_embed(
+                texts,
+                model=args.embedding_model,
+                api_key=args.embedding_binding_api_key,
+            )
+        elif args.embedding_binding == "anthropic":
+            print(f"DEBUG: Using anthropic_embed with model={args.embedding_model}, base_url={args.embedding_binding_host}")
+            return await anthropic_embed(
+                texts,
+                model=args.embedding_model,
+                base_url=args.embedding_binding_host,
+                api_key=args.embedding_binding_api_key,
+            )
+        else:
+            return await openai_embed(
+                texts,
+                model=args.embedding_model,
+                base_url=args.embedding_binding_host,
+                api_key=args.embedding_binding_api_key,
+            )
+
+    embedding_func = EmbeddingFunc(
+        embedding_dim=args.embedding_dim,
+        max_token_size=args.max_embed_tokens,
+        func=get_embedding_func,
     )
 
     # Initialize RAG
@@ -327,6 +369,32 @@ def create_app(args):
                 if args.llm_binding == "lollms" or args.llm_binding == "ollama"
                 else {}
             ),
+            embedding_func=embedding_func,
+            kv_storage=args.kv_storage,
+            graph_storage=args.graph_storage,
+            vector_storage=args.vector_storage,
+            doc_status_storage=args.doc_status_storage,
+            vector_db_storage_cls_kwargs={
+                "cosine_better_than_threshold": args.cosine_threshold
+            },
+            enable_llm_cache_for_entity_extract=args.enable_llm_cache_for_extract,
+            enable_llm_cache=args.enable_llm_cache,
+            auto_manage_storages_states=False,
+            max_parallel_insert=args.max_parallel_insert,
+            addon_params={"language": args.summary_language},
+        )
+    elif args.llm_binding == "anthropic":
+        rag = LightRAG(
+            working_dir=args.working_dir,
+            llm_model_func=anthropic_model_complete,
+            chunk_token_size=int(args.chunk_size),
+            chunk_overlap_token_size=int(args.chunk_overlap_size),
+            llm_model_kwargs={
+                "timeout": args.timeout,
+            },
+            llm_model_name=args.llm_model,
+            llm_model_max_async=args.max_async,
+            llm_model_max_token_size=args.max_tokens,
             embedding_func=embedding_func,
             kv_storage=args.kv_storage,
             graph_storage=args.graph_storage,
@@ -554,7 +622,7 @@ def configure_logging():
     log_file_path = os.path.abspath(os.path.join(log_dir, DEFAULT_LOG_FILENAME))
 
     print(f"\nLightRAG log file: {log_file_path}\n")
-    os.makedirs(os.path.dirname(log_dir), exist_ok=True)
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
 
     # Get log file max size and backup count from environment variables
     log_max_bytes = get_env_value("LOG_MAX_BYTES", DEFAULT_LOG_MAX_BYTES, int)

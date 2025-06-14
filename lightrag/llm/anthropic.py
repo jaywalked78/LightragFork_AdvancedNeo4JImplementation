@@ -40,7 +40,6 @@ from lightrag.utils import (
 )
 from lightrag.api import __api_version__
 from typing import Optional, List, Dict  # Added imports
-from ..base import BaseLLM  # Import the base class
 
 
 # Custom exception for retry mechanism
@@ -368,7 +367,7 @@ def get_available_embedding_models() -> dict[str, dict]:
 
 
 # Define the AnthropicLLM class
-class AnthropicLLM(BaseLLM):
+class AnthropicLLM:
     """
     Implementation of the BaseLLM interface for Anthropic models.
     """

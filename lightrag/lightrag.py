@@ -1184,9 +1184,30 @@ class LightRAG:
         self, chunk: dict[str, Any], pipeline_status=None, pipeline_status_lock=None
     ) -> list:
         try:
+            # Create global_config with chunk post-processing settings
+            global_config = asdict(self)
+            # Add missing chunk post-processing configuration from environment
+            from .constants import DEFAULT_ENABLE_CHUNK_POST_PROCESSING
+            from .api.config import get_env_value
+            global_config["enable_chunk_post_processing"] = get_env_value(
+                "ENABLE_CHUNK_POST_PROCESSING", DEFAULT_ENABLE_CHUNK_POST_PROCESSING, bool
+            )
+            global_config["enable_llm_cache_for_post_process"] = get_env_value(
+                "ENABLE_LLM_CACHE_FOR_POST_PROCESS", True, bool
+            )
+            global_config["log_validation_changes"] = get_env_value(
+                "LOG_VALIDATION_CHANGES", False, bool
+            )
+            global_config["chunk_validation_batch_size"] = get_env_value(
+                "CHUNK_VALIDATION_BATCH_SIZE", 50, int
+            )
+            global_config["chunk_validation_timeout"] = get_env_value(
+                "CHUNK_VALIDATION_TIMEOUT", 30, int
+            )
+            
             chunk_results = await extract_entities(
                 chunk,
-                global_config=asdict(self),
+                global_config=global_config,
                 pipeline_status=pipeline_status,
                 pipeline_status_lock=pipeline_status_lock,
                 llm_response_cache=self.llm_response_cache,

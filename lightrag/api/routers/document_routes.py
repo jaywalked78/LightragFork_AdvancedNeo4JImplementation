@@ -1903,9 +1903,23 @@ def create_document_routes(
                 file_names_to_try.append(doc_status.file_path)
 
             for file_name in file_names_to_try:
+                # Truncate filename if it's too long for the filesystem
+                if len(file_name) > 255:
+                    logger.warning(f"File name too long ({len(file_name)} chars), truncating to 255")
+                    file_name = file_name[:255]
+                
                 input_file_path = doc_manager.input_dir / file_name
                 logger.info(f"Attempting to delete file: {input_file_path}")
-                if input_file_path.exists() and input_file_path.is_file():
+                
+                try:
+                    exists = input_file_path.exists() and input_file_path.is_file()
+                except OSError as e:
+                    if e.errno == 36:  # File name too long
+                        logger.warning(f"File name too long to check existence: {file_name[:100]}...")
+                        continue
+                    raise
+                
+                if exists:
                     try:
                         input_file_path.unlink()
                         file_deleted = True

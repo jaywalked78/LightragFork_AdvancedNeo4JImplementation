@@ -1572,9 +1572,17 @@ async def use_llm_func_with_cache(
             cache_type=cache_type,
         )
         if cached_return:
-            logger.debug(f"Found cache for {arg_hash}")
+            if cache_type == "post_process":
+                logger.info(f"Cache HIT for chunk post-processing: {arg_hash}")
+            else:
+                logger.debug(f"Found cache for {arg_hash}")
             statistic_data["llm_cache"] += 1
             return cached_return
+        
+        # Cache miss - log for post-processing
+        if cache_type == "post_process":
+            logger.info(f"Cache MISS for chunk post-processing: {arg_hash} - Processing with LLM")
+        
         statistic_data["llm_call"] += 1
 
         # Call LLM

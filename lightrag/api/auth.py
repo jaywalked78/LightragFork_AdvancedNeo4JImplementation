@@ -1,6 +1,18 @@
 from datetime import datetime, timedelta
 
-import jwt
+try:
+    # Try PyJWT first (the correct library)
+    import jwt
+    # Test if it has encode method
+    if not hasattr(jwt, 'encode'):
+        raise ImportError("jwt module doesn't have encode method")
+except (ImportError, AttributeError):
+    # Fallback: try to import from jose which is compatible
+    try:
+        from jose import jwt
+    except ImportError:
+        raise ImportError("Neither PyJWT nor python-jose is properly installed")
+
 from dotenv import load_dotenv
 from fastapi import HTTPException, status
 from pydantic import BaseModel
