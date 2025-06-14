@@ -1,6 +1,8 @@
 aiohttp
 configparser
 future
+fuzzywuzzy
+psutil
 
 # Additional Packages for export Functionality
 pandas>=2.0.0
