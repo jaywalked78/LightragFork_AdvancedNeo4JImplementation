@@ -1050,6 +1050,30 @@ def create_document_routes(
             HTTPException: If an error occurs during text processing (500).
         """
         try:
+            # Save the text as a markdown file in the inputs folder
+            if request.file_source:
+                # Use provided file source as filename
+                file_name = request.file_source
+                # Ensure it has .md extension
+                if not file_name.endswith('.md'):
+                    file_name = f"{file_name}.md"
+            else:
+                # Generate a filename based on timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                file_name = f"text_{timestamp}.md"
+            
+            # Create full path
+            file_path = doc_manager.input_dir / file_name
+            
+            # Write content to file
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(request.text)
+                logger.info(f"Saved text to file: {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to save text to file: {str(e)}")
+                # Continue processing even if file save fails
+            
             background_tasks.add_task(
                 pipeline_index_texts,
                 rag,
@@ -1090,6 +1114,31 @@ def create_document_routes(
             HTTPException: If an error occurs during text processing (500).
         """
         try:
+            # Save each text as a markdown file in the inputs folder
+            for i, text in enumerate(request.texts):
+                if request.file_sources and i < len(request.file_sources):
+                    # Use provided file source as filename
+                    file_name = request.file_sources[i]
+                    # Ensure it has .md extension
+                    if not file_name.endswith('.md'):
+                        file_name = f"{file_name}.md"
+                else:
+                    # Generate a filename based on timestamp and index
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    file_name = f"text_{timestamp}_{i}.md"
+                
+                # Create full path
+                file_path = doc_manager.input_dir / file_name
+                
+                # Write content to file
+                try:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(text)
+                    logger.info(f"Saved text to file: {file_path}")
+                except Exception as e:
+                    logger.error(f"Failed to save text to file: {str(e)}")
+                    # Continue processing even if file save fails
+            
             background_tasks.add_task(
                 pipeline_index_texts,
                 rag,

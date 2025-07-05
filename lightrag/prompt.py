@@ -28,16 +28,41 @@ Given a text document about technical workflows, development sessions, or screen
 
 ** Focus on the most important and frequently mentioned items only **
 
+**IMPORTANT - Identity Resolution**:
+When extracting entities, apply these specific identity mappings:
+- ANY reference to "User", "user", "the user", or "a user" should be extracted as "Jason"
+- ANY reference to "Jaywalked" or "jaywalked" should be extracted as "Jason" (this is Jason's username)
+- ANY reference to "Jay" should be extracted as "Jason" (this is Jason's nickname when talking to Claude)
+- ANY reference to "Jason Cox" should be extracted as "Jason" (use first name only)
+- These are all the same person and should be consolidated into a single "Jason" entity
+
 **Entity Priority (extract in this order)**:
 1. Named software tools and platforms mentioned multiple times
-2. Specific people's names
+2. Specific people's names (applying identity resolution above)  
 3. Named workflows or processes with clear identities
-4. Specific error messages or artifacts
+4. Complete, meaningful error messages and significant artifacts
+
+**EXCLUDE - Do NOT extract these as entities**:
+- Fragments of error messages or incomplete error text (e.g., "$index is not defined", "# comment character")
+- Single character symbols or syntax elements (e.g., "#", "$", "@" by themselves)
+- Generic file extensions without context (e.g., ".py files", ".json", ".dll")
+- Temporary or placeholder file names (e.g., "1.png", "temp.txt", "thumb-placeholder.jpg")
+- Generic configuration terms without specific context (e.g., ".env configuration files" - prefer specific config names)
+- Storage usage metrics or generic status messages (e.g., "97% storage used", "78 Completed Documents")
+- HTTP status codes without meaningful context (e.g., standalone "404", "401", "429")
+- Version numbers or build artifacts without significant meaning
+- Generic UI elements or common technical terms that don't represent specific entities
+
+**INCLUDE - Extract these meaningful errors and artifacts**:
+- Complete, specific error messages that Jason troubleshoots (e.g., "Cannot read properties of undefined error in n8n Code Node")
+- Named error types with full context (e.g., "PostgreSQL 42P01 relation does not exist error")
+- Specific system errors that require resolution (e.g., "Git index.lock file error")
+- Important configuration files with specific names (e.g., "setup-backup-cron.sh", ".cursorrules file")
 
 **Relationship Priority (extract only the most essential)**:
 1. Direct tool usage relationships that are explicitly stated
 2. Clear technical connections between systems
-3. Specific actions performed by people
+3. Specific actions performed by people (especially Jason)
 4. Error relationships that are clearly documented
 
 **Quality over Quantity**: Better to extract 8 high-quality, clearly documented relationships than 20 inferred ones
@@ -48,6 +73,7 @@ When analyzing screen recording data, pay special attention to:
 - Technical tools, frameworks, and services being used
 - Workflows and processes being performed
 - Concepts and patterns being applied
+- Actions performed by Jason (formerly referenced as User/Jay/Jaywalked)
 
 Use {language} as output language.
 
@@ -114,12 +140,13 @@ PROMPTS["entity_extraction_examples"] = [
 Entity_types: [tool, technology, workflow, concept, person]
 Text:
 ```
-During the session, the developer used n8n to create a Lead Enricher Workflow. This workflow integrated with the Brave Search API to gather company information. Claude AI was extensively used for debugging JavaScript code in the n8n Code Nodes. The developer implemented data transformation logic to parse JSON responses from the API.
+During the session, Jason used n8n to create a Lead Enricher Workflow. This workflow integrated with the Brave Search API to gather company information. Claude AI was extensively used by Jason for debugging JavaScript code in the n8n Code Nodes. The developer implemented data transformation logic to parse JSON responses from the API.
 
-The workflow encountered errors like "Code doesn't return items properly", which were resolved through iterative debugging with Claude AI. The AI assistant helped refine the JavaScript code to ensure proper JSON formatting and data structure.
+The workflow encountered errors like "Code doesn't return items properly", which were resolved through iterative debugging with Claude AI. The AI assistant helped Jason refine the JavaScript code to ensure proper JSON formatting and data structure.
 ```
 
 Output:
+("entity"{tuple_delimiter}"Jason"{tuple_delimiter}"person"{tuple_delimiter}"The developer and user who creates workflows, debugs code, and works with various automation tools and APIs."){record_delimiter}
 ("entity"{tuple_delimiter}"n8n"{tuple_delimiter}"tool"{tuple_delimiter}"n8n is a workflow automation platform used for building data pipelines and integrating various services."){record_delimiter}
 ("entity"{tuple_delimiter}"Lead Enricher Workflow"{tuple_delimiter}"workflow"{tuple_delimiter}"A workflow designed to gather and enrich company and contact information from multiple sources."){record_delimiter}
 ("entity"{tuple_delimiter}"Brave Search API"{tuple_delimiter}"tool"{tuple_delimiter}"A web search API used for gathering company information and web data."){record_delimiter}
@@ -128,6 +155,9 @@ Output:
 ("entity"{tuple_delimiter}"n8n Code Node"{tuple_delimiter}"tool"{tuple_delimiter}"A node within n8n that allows execution of custom JavaScript code."){record_delimiter}
 ("entity"{tuple_delimiter}"Data Transformation"{tuple_delimiter}"concept"{tuple_delimiter}"The process of converting data from one format to another for compatibility between systems."){record_delimiter}
 ("entity"{tuple_delimiter}"JSON"{tuple_delimiter}"technology"{tuple_delimiter}"A data format used for API responses and data interchange."){record_delimiter}
+("relationship"{tuple_delimiter}"Jason"{tuple_delimiter}"n8n"{tuple_delimiter}"Jason uses n8n to create and manage automation workflows."{tuple_delimiter}"uses"{tuple_delimiter}"tool usage, workflow creation"{tuple_delimiter}9){record_delimiter}
+("relationship"{tuple_delimiter}"Jason"{tuple_delimiter}"Lead Enricher Workflow"{tuple_delimiter}"Jason created the Lead Enricher Workflow for data gathering."{tuple_delimiter}"creates"{tuple_delimiter}"workflow development, automation"{tuple_delimiter}9){record_delimiter}
+("relationship"{tuple_delimiter}"Jason"{tuple_delimiter}"Claude AI"{tuple_delimiter}"Jason extensively uses Claude AI for debugging JavaScript code and getting development assistance."{tuple_delimiter}"uses"{tuple_delimiter}"AI assistance, debugging"{tuple_delimiter}9){record_delimiter}
 ("relationship"{tuple_delimiter}"Lead Enricher Workflow"{tuple_delimiter}"n8n"{tuple_delimiter}"The Lead Enricher Workflow is built and executed within the n8n platform."{tuple_delimiter}"runs_on"{tuple_delimiter}"workflow automation, platform usage"{tuple_delimiter}9){record_delimiter}
 ("relationship"{tuple_delimiter}"Lead Enricher Workflow"{tuple_delimiter}"Brave Search API"{tuple_delimiter}"The workflow integrates with Brave Search API to gather company information."{tuple_delimiter}"calls_api"{tuple_delimiter}"api integration, data acquisition"{tuple_delimiter}8){record_delimiter}
 ("relationship"{tuple_delimiter}"Claude AI"{tuple_delimiter}"JavaScript"{tuple_delimiter}"Claude AI assists in debugging and refining JavaScript code for the workflow."{tuple_delimiter}"debugs"{tuple_delimiter}"code assistance, debugging"{tuple_delimiter}9){record_delimiter}
@@ -214,10 +244,18 @@ Output:
 PROMPTS["entity_continue_extraction"] = """
 Some additional entities and relationships may have been missed in the last extraction.
 
+**IMPORTANT - Identity Resolution (SAME AS BEFORE)**:
+When extracting entities, apply these specific identity mappings:
+- ANY reference to "User", "user", "the user", or "a user" should be extracted as "Jason"
+- ANY reference to "Jaywalked" or "jaywalked" should be extracted as "Jason" (this is Jason's username)
+- ANY reference to "Jay" should be extracted as "Jason" (this is Jason's nickname when talking to Claude)
+- ANY reference to "Jason Cox" should be extracted as "Jason" (use first name only)
+- These are all the same person and should be consolidated into a single "Jason" entity
+
 Focus on capturing ONLY concrete items that were overlooked:
 - Named tools, systems, or platforms that were missed
 - Specific workflows or processes with clear names or roles
-- Real people, organizations, or specific errors that were missed
+- Real people, organizations, or specific errors that were missed (applying identity resolution above)
 - Critical artifacts that were created or extensively discussed
 
 **Apply the same strict criteria as before - avoid abstract concepts and focus on concrete, observable entities and relationships**
@@ -448,6 +486,14 @@ Return only a number between 0-1, without any additional content.
 PROMPTS["relationship_post_processing"] = """---Goal---
 You are analyzing extracted entities and relationships from a document to improve accuracy and remove noise.
 
+**IMPORTANT - Identity Resolution**:
+Before processing, ensure these identity mappings are applied:
+- ANY reference to "User", "user", "the user", or "a user" should be treated as "Jason"
+- ANY reference to "Jaywalked" or "jaywalked" should be treated as "Jason" (this is Jason's username)
+- ANY reference to "Jay" should be treated as "Jason" (this is Jason's nickname when talking to Claude)
+- ANY reference to "Jason Cox" should be treated as "Jason" (use first name only)
+- These are all the same person and should be consolidated into a single "Jason" entity
+
 ---Context---
 DOCUMENT CONTENT:
 {document_text}
@@ -467,19 +513,23 @@ Review and filter these relationships for accuracy and relevance. Your goal is t
 3. **Practical Value**: Keep relationships that provide meaningful insights about the document
 4. **Avoid Noise**: Remove relationships based on coincidental mentions or weak associations
 5. **Preserve Relationship Types**: KEEP the original rel_type (e.g., "uses", "runs_on", "creates") unless it is factually incorrect. Do NOT change specific relationship types to generic "related"
+6. **Entity Quality Check**: If an entity is a low-value fragment (error fragments, single symbols, generic file extensions), mark any relationships involving it for removal
 
 **FILTERING GUIDELINES:**
 ✅ KEEP relationships that are:
-- Explicitly stated tool usage ("Zoom uses SAIL POS")
+- Explicitly stated tool usage ("Jason uses n8n to create workflows")
 - Clear technical connections ("n8n runs Reddit Scrape To DB Workflow")
-- Specific user actions ("Angelique Gates shares screen via Zoom")
+- Specific troubleshooting actions ("Jason debugs PostgreSQL connection error")
 - Well-documented integrations ("Google Gemini Chat Model integrates with Gmail")
+- Meaningful error resolution ("Jason resolves Git index.lock file error")
 
 ❌ REMOVE relationships that are:
 - Too abstract ("Users implements Data Transformations")
 - Based on weak associations ("Business Research investigates Hotworx")
-- Redundant or duplicate meanings
+- Involving low-value entities (error fragments, single symbols, placeholder files)
 - Generic concepts without specific evidence
+- Relationships with entities like: "$index", "#", "1.png", ".py files", "404", "97% storage"
+- Redundant or duplicate meanings
 
 **QUALITY SCORING** (1-10 scale):
 - 9-10: Explicitly stated, high practical value

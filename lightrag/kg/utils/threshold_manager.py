@@ -6,7 +6,10 @@ from ...utils import logger
 
 class ThresholdManager:
     """
-    Manages dynamic thresholds for relationship weights based on observed data.
+    [DEPRECATED] Manages dynamic thresholds for relationship weights based on observed data.
+
+    NOTE: This system is deprecated and replaced by chunk-level post-processing.
+    Logging is disabled by default. The class is retained for backward compatibility.
 
     This class tracks relationship weights, calculates appropriate thresholds
     based on percentiles, and provides adaptive thresholding for different
@@ -22,6 +25,7 @@ class ThresholdManager:
         use_dynamic_thresholds: bool = True,
         floor: float = 0.1,
         ceiling: float = 0.4,
+        enable_logging: bool = False,  # Disabled by default since deprecated
     ):
         """
         Initialize the ThresholdManager.
@@ -34,6 +38,7 @@ class ThresholdManager:
             use_dynamic_thresholds: Whether to use dynamic thresholds or always use default (default: True)
             floor: Minimum allowed threshold value (default: 0.1)
             ceiling: Maximum allowed threshold value (default: 0.4)
+            enable_logging: Whether to log threshold updates (default: False, since deprecated)
         """
         self.default_threshold = default_threshold
         self.min_samples = min_samples
@@ -42,6 +47,7 @@ class ThresholdManager:
         self.use_dynamic_thresholds = use_dynamic_thresholds
         self.floor = floor
         self.ceiling = ceiling
+        self.enable_logging = enable_logging
 
         # Storage for observed weights
         self._all_weights: List[float] = []
@@ -102,9 +108,10 @@ class ThresholdManager:
             self._global_threshold = max(
                 self.floor, min(self.ceiling, self._global_threshold)
             )
-            logger.info(
-                f"Updated global threshold to {self._global_threshold:.3f} based on {len(self._all_weights)} samples"
-            )
+            if self.enable_logging:
+                logger.info(
+                    f"Updated global threshold to {self._global_threshold:.3f} based on {len(self._all_weights)} samples"
+                )
 
         # Calculate type-specific thresholds
         for rel_type, weights in self._type_weights.items():
@@ -113,9 +120,10 @@ class ThresholdManager:
                 # Apply floor and ceiling
                 threshold = max(self.floor, min(self.ceiling, threshold))
                 self._type_thresholds[rel_type] = threshold
-                logger.info(
-                    f"Updated threshold for '{rel_type}' to {threshold:.3f} based on {len(weights)} samples"
-                )
+                if self.enable_logging:
+                    logger.info(
+                        f"Updated threshold for '{rel_type}' to {threshold:.3f} based on {len(weights)} samples"
+                    )
 
     def get_threshold(self, relationship_type: Optional[str] = None) -> float:
         """
@@ -196,7 +204,7 @@ def get_default_threshold_manager() -> ThresholdManager:
     """
     global _default_threshold_manager
     if _default_threshold_manager is None:
-        logger.info("Creating default ThresholdManager instance")
+        # Silently create instance - deprecated system
         _default_threshold_manager = ThresholdManager()
     return _default_threshold_manager
 
@@ -211,5 +219,5 @@ def set_default_threshold_manager(manager: ThresholdManager) -> None:
     global _default_threshold_manager
     if not isinstance(manager, ThresholdManager):
         raise TypeError("Provided manager must be an instance of ThresholdManager")
-    logger.info(f"Setting default ThresholdManager instance to: {manager}")
+    # Silently set instance - deprecated system
     _default_threshold_manager = manager

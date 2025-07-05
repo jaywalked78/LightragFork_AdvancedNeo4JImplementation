@@ -175,7 +175,13 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
         """
         try:
             param = request.to_query_params(True)
-            response = await rag.aquery(request.query, param=param)
+            result = await rag.aquery(request.query, param=param)
+            
+            # Handle AdvancedLightRAG tuple return format
+            if isinstance(result, tuple):
+                response, retrieval_details = result
+            else:
+                response = result
 
             from fastapi.responses import StreamingResponse
 

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Union, final
 import numpy as np
 import configparser
+import pytz
 
 from lightrag.types import KnowledgeGraph, KnowledgeGraphNode, KnowledgeGraphEdge
 
@@ -398,6 +399,11 @@ class PGKVStorage(BaseKVStorage):
         """Get doc_full data by id."""
         sql = SQL_TEMPLATES["get_by_id_" + self.namespace]
         params = {"workspace": self.db.workspace, "id": id}
+        
+        # Temporary debug logging for chunk lookups
+        if self.namespace == "text_chunks":
+            logger.info(f"PG get_by_id: Looking for chunk '{id}' in workspace '{self.db.workspace}' using SQL: {sql}")
+        
         if is_namespace(self.namespace, NameSpace.KV_STORE_LLM_RESPONSE_CACHE):
             array_res = await self.db.query(sql, params, multirows=True)
             res = {}
@@ -406,6 +412,8 @@ class PGKVStorage(BaseKVStorage):
             return res if res else None
         else:
             response = await self.db.query(sql, params)
+            if self.namespace == "text_chunks":
+                logger.info(f"PG get_by_id: Chunk '{id}' found: {response is not None}")
             return response if response else None
 
     async def get_by_mode_and_id(self, mode: str, id: str) -> Union[dict, None]:
@@ -479,12 +487,17 @@ class PGKVStorage(BaseKVStorage):
         if is_namespace(self.namespace, NameSpace.KV_STORE_TEXT_CHUNKS):
             pass
         elif is_namespace(self.namespace, NameSpace.KV_STORE_FULL_DOCS):
+            # Get current time with CST timezone, then make it timezone-naive for PostgreSQL
+            cst = pytz.timezone('US/Central')
+            current_time = datetime.datetime.now(cst).replace(tzinfo=None)
             for k, v in data.items():
                 upsert_sql = SQL_TEMPLATES["upsert_doc_full"]
                 _data = {
                     "id": k,
                     "content": v["content"],
                     "workspace": self.db.workspace,
+                    "create_time": current_time,
+                    "update_time": current_time,
                 }
                 await self.db.execute(upsert_sql, _data)
         elif is_namespace(self.namespace, NameSpace.KV_STORE_LLM_RESPONSE_CACHE):
@@ -685,8 +698,9 @@ class PGVectorStorage(BaseVectorStorage):
         if not data:
             return
 
-        # Get current time with UTC timezone
-        current_time = datetime.datetime.now(timezone.utc)
+        # Get current time with CST timezone, then make it timezone-naive for PostgreSQL
+        cst = pytz.timezone('US/Central')
+        current_time = datetime.datetime.now(cst).replace(tzinfo=None)
         list_data = [
             {
                 "__id__": k,
@@ -1039,21 +1053,32 @@ class PGDocStatusStorage(DocStatusStorage):
 
         def parse_datetime(dt_str):
             if dt_str is None:
-                return None
+                # Return current CST time if no timestamp provided
+                cst = pytz.timezone('US/Central')
+                return datetime.datetime.now(cst)
             if isinstance(dt_str, (datetime.date, datetime.datetime)):
-                # If it's a datetime object without timezone info, remove timezone info
+                # If it's a datetime object, ensure it has CST timezone
                 if isinstance(dt_str, datetime.datetime):
-                    # Remove timezone info, return naive datetime object
-                    return dt_str.replace(tzinfo=None)
+                    # If no timezone info, assume it's CST
+                    if dt_str.tzinfo is None:
+                        cst = pytz.timezone('US/Central')
+                        return cst.localize(dt_str)
+                    # Convert to CST if it has timezone info
+                    return dt_str.astimezone(pytz.timezone('US/Central'))
                 return dt_str
             try:
                 # Process ISO format string with timezone
                 dt = datetime.datetime.fromisoformat(dt_str)
-                # Remove timezone info, return naive datetime object
-                return dt.replace(tzinfo=None)
+                # Convert to CST timezone
+                if dt.tzinfo is None:
+                    cst = pytz.timezone('US/Central')
+                    return cst.localize(dt)
+                return dt.astimezone(pytz.timezone('US/Central'))
             except (ValueError, TypeError):
                 logger.warning(f"Unable to parse datetime string: {dt_str}")
-                return None
+                # Return current CST time as fallback
+                cst = pytz.timezone('US/Central')
+                return datetime.datetime.now(cst)
 
         # Modified SQL to include created_at and updated_at in both INSERT and UPDATE operations
         # Both fields are updated from the input data in both INSERT and UPDATE cases
@@ -1069,7 +1094,7 @@ class PGDocStatusStorage(DocStatusStorage):
                   created_at = EXCLUDED.created_at,
                   updated_at = EXCLUDED.updated_at"""
         for k, v in data.items():
-            # Remove timezone information, store utc time in db
+            # Convert timestamps to CST timezone and store in db
             created_at = parse_datetime(v.get("created_at"))
             updated_at = parse_datetime(v.get("updated_at"))
 
@@ -2305,8 +2330,8 @@ class PGGraphStorage(BaseGraphStorage):
 
 NAMESPACE_TABLE_MAP = {
     NameSpace.KV_STORE_FULL_DOCS: "TLL_LIGHTRAG_DOC_FULL",
-    NameSpace.KV_STORE_TEXT_CHUNKS: "TLL_LIGHTRAG_DOC_CHUNKS",
-    NameSpace.VECTOR_STORE_CHUNKS: "TLL_LIGHTRAG_DOC_CHUNKS",
+    NameSpace.KV_STORE_TEXT_CHUNKS: "tll_lightrag_doc_chunks",
+    NameSpace.VECTOR_STORE_CHUNKS: "tll_lightrag_doc_chunks",
     NameSpace.VECTOR_STORE_ENTITIES: "TLL_LIGHTRAG_VDB_ENTITY",
     NameSpace.VECTOR_STORE_RELATIONSHIPS: "TLL_LIGHTRAG_VDB_RELATION",
     NameSpace.DOC_STATUS: "TLL_LIGHTRAG_DOC_STATUS",
@@ -2328,8 +2353,8 @@ TABLES = {
                     doc_name VARCHAR(1024),
                     content TEXT,
                     meta JSONB,
-                    create_time TIMESTAMP(0),
-                    update_time TIMESTAMP(0),
+                    create_time TIMESTAMP(0) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    update_time TIMESTAMP(0) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 	                CONSTRAINT TLL_LIGHTRAG_DOC_FULL_PK PRIMARY KEY (workspace, id)
                     )"""
     },
@@ -2384,8 +2409,8 @@ TABLES = {
 	                mode varchar(32) NOT NULL,
                     original_prompt TEXT,
                     return_value TEXT,
-                    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    update_time TIMESTAMP,
+                    create_time TIMESTAMP(0) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    update_time TIMESTAMP(0) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 	                CONSTRAINT TLL_LIGHTRAG_LLM_CACHE_PK PRIMARY KEY (workspace, mode, id)
                     )"""
     },
@@ -2414,7 +2439,7 @@ SQL_TEMPLATES = {
                             """,
     "get_by_id_text_chunks": """SELECT id, tokens, COALESCE(content, '') as content,
                                 chunk_order_index, full_doc_id, file_path
-                                FROM TLL_LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND id=$2
+                                FROM tll_lightrag_doc_chunks WHERE workspace=$1 AND id=$2
                             """,
     "get_by_id_llm_response_cache": """SELECT id, original_prompt, COALESCE(return_value, '') as "return", mode
                                 FROM TLL_LIGHTRAG_LLM_CACHE WHERE workspace=$1 AND mode=$2
@@ -2427,16 +2452,16 @@ SQL_TEMPLATES = {
                             """,
     "get_by_ids_text_chunks": """SELECT id, tokens, COALESCE(content, '') as content,
                                   chunk_order_index, full_doc_id, file_path
-                                   FROM TLL_LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND id IN ({ids})
+                                   FROM tll_lightrag_doc_chunks WHERE workspace=$1 AND id IN ({ids})
                                 """,
     "get_by_ids_llm_response_cache": """SELECT id, original_prompt, COALESCE(return_value, '') as "return", mode
                                  FROM TLL_LIGHTRAG_LLM_CACHE WHERE workspace=$1 AND mode= IN ({ids})
                                 """,
     "filter_keys": "SELECT id FROM {table_name} WHERE workspace=$1 AND id IN ({ids})",
-    "upsert_doc_full": """INSERT INTO TLL_LIGHTRAG_DOC_FULL (id, content, workspace)
-                        VALUES ($1, $2, $3)
+    "upsert_doc_full": """INSERT INTO TLL_LIGHTRAG_DOC_FULL (id, content, workspace, create_time, update_time)
+                        VALUES ($1, $2, $3, $4, $5)
                         ON CONFLICT (workspace,id) DO UPDATE
-                           SET content = $2, update_time = CURRENT_TIMESTAMP
+                           SET content = $2, update_time = $5
                        """,
     "upsert_llm_response_cache": """INSERT INTO TLL_LIGHTRAG_LLM_CACHE(workspace,id,original_prompt,return_value,mode)
                                       VALUES ($1, $2, $3, $4, $5)
@@ -2446,7 +2471,7 @@ SQL_TEMPLATES = {
                                       mode=EXCLUDED.mode,
                                       update_time = CURRENT_TIMESTAMP
                                      """,
-    "upsert_chunk": """INSERT INTO TLL_LIGHTRAG_DOC_CHUNKS (workspace, id, tokens,
+    "upsert_chunk": """INSERT INTO tll_lightrag_doc_chunks (workspace, id, tokens,
                       chunk_order_index, full_doc_id, content, content_vector, file_path,
                       create_time, update_time)
                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -2486,7 +2511,7 @@ SQL_TEMPLATES = {
     "relationships": """
     WITH relevant_chunks AS (
         SELECT id as chunk_id
-        FROM TLL_LIGHTRAG_DOC_CHUNKS
+        FROM tll_lightrag_doc_chunks
         WHERE $2::varchar[] IS NULL OR full_doc_id = ANY($2::varchar[])
     )
     SELECT source_id as src_id, target_id as tgt_id, EXTRACT(EPOCH FROM create_time)::BIGINT as created_at
@@ -2503,7 +2528,7 @@ SQL_TEMPLATES = {
     "entities": """
         WITH relevant_chunks AS (
             SELECT id as chunk_id
-            FROM TLL_LIGHTRAG_DOC_CHUNKS
+            FROM tll_lightrag_doc_chunks
             WHERE $2::varchar[] IS NULL OR full_doc_id = ANY($2::varchar[])
         )
         SELECT entity_name, EXTRACT(EPOCH FROM create_time)::BIGINT as created_at FROM
@@ -2520,13 +2545,13 @@ SQL_TEMPLATES = {
     "chunks": """
         WITH relevant_chunks AS (
             SELECT id as chunk_id
-            FROM TLL_LIGHTRAG_DOC_CHUNKS
+            FROM tll_lightrag_doc_chunks
             WHERE $2::varchar[] IS NULL OR full_doc_id = ANY($2::varchar[])
         )
         SELECT id, content, file_path, EXTRACT(EPOCH FROM create_time)::BIGINT as created_at FROM
             (
                 SELECT id, content, file_path, create_time, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-                FROM TLL_LIGHTRAG_DOC_CHUNKS
+                FROM tll_lightrag_doc_chunks
                 WHERE workspace=$1
                 AND id IN (SELECT chunk_id FROM relevant_chunks)
             ) as chunk_distances

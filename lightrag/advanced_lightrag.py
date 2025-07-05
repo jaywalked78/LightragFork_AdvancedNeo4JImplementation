@@ -303,6 +303,29 @@ class AdvancedLightRAG(LightRAG):
         config["enhanced_filter_console_logging"] = self.enhanced_filter_console_logging
         config["enhanced_filter_monitoring_mode"] = self.enhanced_filter_monitoring_mode
 
+        # Add chunk post-processing configuration from environment
+        from .constants import DEFAULT_ENABLE_CHUNK_POST_PROCESSING
+        from .utils import get_env_value
+        config["enable_chunk_post_processing"] = get_env_value(
+            "ENABLE_CHUNK_POST_PROCESSING", DEFAULT_ENABLE_CHUNK_POST_PROCESSING, bool
+        )
+        config["enable_llm_cache_for_post_process"] = get_env_value(
+            "ENABLE_LLM_CACHE_FOR_POST_PROCESS", True, bool
+        )
+        config["log_validation_changes"] = get_env_value(
+            "LOG_VALIDATION_CHANGES", False, bool
+        )
+        config["chunk_validation_batch_size"] = get_env_value(
+            "CHUNK_VALIDATION_BATCH_SIZE", 50, int
+        )
+        config["chunk_validation_timeout"] = get_env_value(
+            "CHUNK_VALIDATION_TIMEOUT", 30, int
+        )
+
+        # Add llm_response_cache to config for post-processing
+        if self.llm_response_cache is not None:
+            config["llm_response_cache"] = self.llm_response_cache
+
         return config
 
     async def _process_entity_relation_graph(
@@ -350,20 +373,29 @@ class AdvancedLightRAG(LightRAG):
             Tuple of (response, retrieval_details) where retrieval_details contains
             comprehensive information about the retrieval process
         """
-        # Initialize retrieval details
+        # Initialize retrieval details with enhanced timing
         start_time = datetime.now()
         error_message = None
         response_obj = None
         retrieval_details_for_log: Dict[str, Any] = {}
+        
+        # Track cache usage
+        initial_cache_size = len(self.llm_response_cache) if hasattr(self.llm_response_cache, '__len__') else None
 
         try:
-            # Import enhanced query functions
+            # Import enhanced query functions (this is part of setup)
             if self.enable_retrieval_details:
                 from lightrag.advanced_operate import (
                     kg_query_with_details,
                     naive_query_with_details,
                     mix_kg_vector_query,
                 )
+                
+                # Record retrieval start time (after setup/imports)
+                retrieval_start_time = datetime.now()
+                
+                # Store original mode for logging
+                original_mode = param.mode
 
                 # Use enhanced query functions that return details
                 if param.mode in ["local", "global", "hybrid"]:
@@ -427,6 +459,12 @@ class AdvancedLightRAG(LightRAG):
             else:
                 # Fallback to standard query functions without details
                 from lightrag.operate import kg_query, naive_query
+                
+                # Record retrieval start time (after setup/imports)
+                retrieval_start_time = datetime.now()
+                
+                # Store original mode for logging
+                original_mode = param.mode
 
                 if param.mode in ["local", "global", "hybrid"]:
                     response_obj = await kg_query(
@@ -473,6 +511,23 @@ class AdvancedLightRAG(LightRAG):
                     retrieval_details_for_log = {"mode": "bypass", "direct_llm": True}
                 else:
                     raise ValueError(f"Unknown mode {param.mode}")
+            
+            # Record timing: Query processing complete
+            query_end_time = datetime.now()
+            
+            # Check cache usage
+            final_cache_size = len(self.llm_response_cache) if hasattr(self.llm_response_cache, '__len__') else None
+            cache_used = (
+                initial_cache_size is not None and 
+                final_cache_size is not None and 
+                final_cache_size == initial_cache_size
+            )
+            
+            # Log cache usage
+            if cache_used:
+                logger.info("🔄 LLM cache HIT - response retrieved from cache")
+            else:
+                logger.info("🆕 LLM cache MISS - new response generated")
 
             # Handle response formatting for logging
             final_response_text = ""
@@ -496,7 +551,48 @@ class AdvancedLightRAG(LightRAG):
 
         finally:
             end_time = datetime.now()
-            response_time_ms = (end_time - start_time).total_seconds() * 1000
+            total_time_ms = (end_time - start_time).total_seconds() * 1000
+            
+            # Calculate detailed timing metrics
+            retrieval_time_ms = None
+            query_processing_time_ms = None
+            setup_time_ms = None
+            
+            if 'retrieval_start_time' in locals() and 'query_end_time' in locals():
+                setup_time_ms = (retrieval_start_time - start_time).total_seconds() * 1000
+                query_processing_time_ms = (query_end_time - retrieval_start_time).total_seconds() * 1000
+                retrieval_time_ms = query_processing_time_ms  # For backward compatibility
+            
+            # Use original mode for logging instead of potentially modified mode
+            display_mode = original_mode if 'original_mode' in locals() else param.mode
+            
+            # Add comprehensive timing data to retrieval details
+            timing_details = {
+                "total_time_ms": total_time_ms,
+                "setup_time_ms": setup_time_ms,
+                "query_processing_time_ms": query_processing_time_ms,
+                "retrieval_time_ms": retrieval_time_ms,  # Alias for query_processing_time_ms
+                "llm_cache_used": cache_used if 'cache_used' in locals() else None,
+                "query_mode": display_mode,
+                "original_mode": original_mode if 'original_mode' in locals() else param.mode,
+                "final_mode": param.mode,  # Mode after any internal modifications
+            }
+            retrieval_details_for_log.update(timing_details)
+            
+            # Log detailed timing information
+            logger.info(f"⏱️  Query Timing Summary ({display_mode.upper()} mode):")
+            logger.info(f"   📊 Total time: {total_time_ms:.2f}ms")
+            if setup_time_ms is not None:
+                logger.info(f"   🔧 Setup time: {setup_time_ms:.2f}ms")
+            if query_processing_time_ms is not None:
+                logger.info(f"   🔍 Query processing: {query_processing_time_ms:.2f}ms")
+            if 'cache_used' in locals():
+                cache_status = "HIT" if cache_used else "MISS"
+                logger.info(f"   💾 Cache status: {cache_status}")
+            
+            # Log mode changes if they occurred
+            if 'original_mode' in locals() and original_mode != param.mode:
+                logger.info(f"   🔄 Mode changed: {original_mode.upper()} → {param.mode.upper()}")
 
             # Log query if logger is enabled
             q_logger = await self.get_query_logger_instance()
@@ -511,7 +607,7 @@ class AdvancedLightRAG(LightRAG):
                     query_parameters=(
                         param.to_dict() if hasattr(param, "to_dict") else vars(param)
                     ),
-                    response_time_ms=response_time_ms,
+                    response_time_ms=total_time_ms,
                     tokens_processed=retrieval_details_for_log.get("tokens_processed"),
                     error_message=error_message,
                     retrieval_details=retrieval_details_for_log,

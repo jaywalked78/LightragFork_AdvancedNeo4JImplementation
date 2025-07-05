@@ -1188,7 +1188,7 @@ class LightRAG:
             global_config = asdict(self)
             # Add missing chunk post-processing configuration from environment
             from .constants import DEFAULT_ENABLE_CHUNK_POST_PROCESSING
-            from .api.config import get_env_value
+            from .utils import get_env_value
             global_config["enable_chunk_post_processing"] = get_env_value(
                 "ENABLE_CHUNK_POST_PROCESSING", DEFAULT_ENABLE_CHUNK_POST_PROCESSING, bool
             )
@@ -1204,6 +1204,16 @@ class LightRAG:
             global_config["chunk_validation_timeout"] = get_env_value(
                 "CHUNK_VALIDATION_TIMEOUT", 30, int
             )
+            
+            # Add llm_response_cache to global_config for post-processing
+            if self.llm_response_cache is not None:
+                global_config["llm_response_cache"] = self.llm_response_cache
+            
+            # Debug: Show what we're passing to extract_entities
+            logger.info(f"DEBUG: global_config keys being passed to extract_entities: {list(global_config.keys())}")
+            logger.info(f"DEBUG: enable_chunk_post_processing in global_config: {'enable_chunk_post_processing' in global_config}")
+            if 'enable_chunk_post_processing' in global_config:
+                logger.info(f"DEBUG: enable_chunk_post_processing value: {global_config['enable_chunk_post_processing']}")
             
             chunk_results = await extract_entities(
                 chunk,

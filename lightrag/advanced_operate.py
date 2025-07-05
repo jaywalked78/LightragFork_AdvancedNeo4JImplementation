@@ -68,6 +68,54 @@ from lightrag.utils import Tokenizer
 from lightrag.kg.utils.relationship_registry import standardize_relationship_type
 
 
+def _log_split_points(original_content: str, chunks: list[str], section_title: str):
+    """
+    Analyze and log where the content was split by examining the chunk boundaries.
+    """
+    logger.info(f"🔍 Split analysis for section '{section_title}':")
+    
+    # Custom separators we're looking for
+    custom_separators = ["*****", "**"]
+    standard_separators = ["\n\n", "\n", ". ", "! ", "? ", "; ", ": ", " "]
+    
+    for i, chunk in enumerate(chunks):
+        chunk_start = chunk[:100].replace('\n', '\\n')  # First 100 chars for identification
+        logger.info(f"  📄 Chunk {i+1}: {chunk_start}...")
+        
+        if i > 0:  # For chunks after the first, try to identify the split point
+            # Find where this chunk starts in the original content
+            chunk_start_pos = original_content.find(chunk.strip())
+            if chunk_start_pos > 0:
+                # Look at the content just before this chunk to identify the separator
+                context_before = original_content[max(0, chunk_start_pos-20):chunk_start_pos]
+                
+                # Check which separator was likely used
+                separator_found = None
+                for sep in custom_separators + standard_separators:
+                    if sep in context_before or original_content[chunk_start_pos-len(sep):chunk_start_pos] == sep:
+                        separator_found = sep
+                        break
+                
+                if separator_found:
+                    if separator_found in custom_separators:
+                        logger.info(f"    ✨ Split at custom delimiter: '{separator_found}' ✨")
+                    else:
+                        # Replace newlines for display
+                        display_sep = separator_found.replace('\n', '\\n')
+                        logger.info(f"    🔗 Split at standard separator: '{display_sep}'")
+                else:
+                    # Replace newlines for display
+                    display_context = context_before.replace('\n', '\\n')
+                    logger.info(f"    ❓ Split method unclear, context: '{display_context}'")
+    
+    # Log overall split effectiveness
+    custom_splits = sum(1 for sep in custom_separators if sep in original_content)
+    if custom_splits > 0:
+        logger.info(f"🎯 Found {custom_splits} custom delimiter(s) in content - optimal for semantic chunking!")
+    else:
+        logger.info(f"📝 No custom delimiters found - using standard separator hierarchy")
+
+
 def advanced_semantic_chunking(
     tokenizer: Tokenizer,
     content: str,
@@ -184,13 +232,19 @@ def advanced_semantic_chunking(
         header_splits = markdown_splitter.split_text(content)
         logger.info(f"📑 Found {len(header_splits)} header-based sections")
 
+        # Analyze content for custom delimiters before configuring splitter
+        custom_delimiter_count = content.count("*****") + content.count("**")
+        if custom_delimiter_count > 0:
+            logger.info(f"🎯 Detected {content.count('*****')} instances of '*****' and {content.count('**')} instances of '**' in content")
+            logger.info(f"📋 Custom delimiters will be prioritized for semantic chunking")
+        
         # Configure recursive splitter for oversized sections
         if has_tiktoken:
             recursive_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
                 encoding_name="cl100k_base",
                 chunk_size=max_token_size,
                 chunk_overlap=overlap_token_size,
-                separators=["\n\n", "\n", ". ", "! ", "? ", "; ", ": ", " ", ""],
+                separators=["*****", "**", "\n\n", "\n", ". ", "! ", "? ", "; ", ": ", " ", ""],
             )
         else:
             # Convert token sizes to approximate character sizes (rough estimate: 1 token ≈ 4 chars)
@@ -198,7 +252,7 @@ def advanced_semantic_chunking(
             char_overlap_size = overlap_token_size * 4
 
             recursive_splitter = RecursiveCharacterTextSplitter(
-                separators=["\n\n", "\n", ". ", "! ", "? ", "; ", ": ", " ", ""],
+                separators=["*****", "**", "\n\n", "\n", ". ", "! ", "? ", "; ", ": ", " ", ""],
                 chunk_size=char_chunk_size,
                 chunk_overlap=char_overlap_size,
                 length_function=len,
@@ -263,9 +317,13 @@ def advanced_semantic_chunking(
                         ]
                     section_prefix += "..."
 
-                # Split the content
+                # Split the content with detailed logging
+                logger.info(f"🔪 Attempting to split section '{section_title}' using separator hierarchy: ['*****', '**', '\\n\\n', '\\n', '. ', '! ', '? ', '; ', ': ', ' ', '']")
                 sub_chunks = recursive_splitter.split_text(section_content)
-                logger.debug(f"📄 Split into {len(sub_chunks)} sub-chunks")
+                logger.info(f"📄 Split into {len(sub_chunks)} sub-chunks")
+                
+                # Log split points for debugging
+                _log_split_points(section_content, sub_chunks, section_title)
 
                 for i, sub_chunk in enumerate(sub_chunks):
                     # Enhanced context for better standalone understanding
@@ -312,6 +370,7 @@ def advanced_semantic_chunking(
                 {
                     "content": chunk["content"],
                     "tokens": chunk_tokens,
+                    "chunk_order_index": i,
                 }
             )
 
@@ -361,11 +420,12 @@ def _fallback_chunking(
     # The original chunking_by_token_size already returns the correct format
     # Just ensure we're not adding any extra fields
     clean_chunks = []
-    for chunk in fallback_chunks:
+    for i, chunk in enumerate(fallback_chunks):
         clean_chunks.append(
             {
                 "content": chunk["content"],
                 "tokens": chunk["tokens"],
+                "chunk_order_index": i,
             }
         )
 
@@ -838,6 +898,7 @@ async def naive_query_with_details(
         content_data=section,
         response_type=query_param.response_type,
         history=history_context,
+        user_prompt=query,  # Add the missing user_prompt parameter
     )
 
     if query_param.only_need_prompt:
@@ -1097,11 +1158,19 @@ async def mix_kg_vector_query(
         return final_context, combined_retrieval_details
 
     # Build hybrid prompt
+    # Combine kg_context and vector_context into context_data for the prompt
+    combined_context = f"""-----Knowledge Graph Context-----
+{kg_context_str if kg_context_str else "No relevant knowledge graph information found"}
+
+-----Vector Context-----
+{vector_context_str if vector_context_str else "No relevant text information found"}"""
+
     sys_prompt = (
         system_prompt
         if system_prompt
         else PROMPTS.get("mix_rag_response", PROMPTS["rag_response"])
     ).format(
+        context_data=combined_context,
         kg_context=(
             kg_context_str
             if kg_context_str
@@ -1114,6 +1183,7 @@ async def mix_kg_vector_query(
         ),
         response_type=query_param.response_type,
         history=history_context,
+        user_prompt=query,  # Add the missing user_prompt parameter
     )
 
     if query_param.only_need_prompt:

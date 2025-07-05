@@ -61,6 +61,89 @@ from .constants import (
 load_dotenv(dotenv_path=".env", override=False)
 
 
+def _chunk_by_tokens_only(
+    tokenizer: Tokenizer,
+    content: str,
+    overlap_token_size: int,
+    max_token_size: int,
+) -> list[dict[str, Any]]:
+    """Split content by tokens only (no header detection)"""
+    tokens = tokenizer.encode(content)
+    chunks = []
+    
+    for start in range(0, len(tokens), max_token_size - overlap_token_size):
+        end = min(start + max_token_size, len(tokens))
+        chunk_tokens = tokens[start:end]
+        chunk_content = tokenizer.decode(chunk_tokens)
+        if chunk_content.strip():
+            chunks.append({
+                "content": chunk_content.strip(),
+                "tokens": len(chunk_tokens),
+                "chunk_order_index": len(chunks)
+            })
+    
+    return chunks
+
+
+def _chunk_by_headers(
+    tokenizer: Tokenizer,
+    content: str,
+    max_token_size: int,
+    overlap_token_size: int,
+) -> list[dict[str, Any]]:
+    """Split content by markdown headers (# and ##)"""
+    lines = content.split('\n')
+    chunks = []
+    current_chunk_lines = []
+    
+    for line in lines:
+        # Check if this line is a header (starts with # or ##)
+        if line.strip().startswith('# ') or line.strip().startswith('## '):
+            # If we have accumulated content, process it as a chunk
+            if current_chunk_lines:
+                chunk_content = '\n'.join(current_chunk_lines).strip()
+                if chunk_content:
+                    chunk_tokens = tokenizer.encode(chunk_content)
+                    if len(chunk_tokens) > max_token_size:
+                        # If too large, split recursively with token-based method
+                        sub_chunks = _chunk_by_tokens_only(
+                            tokenizer, chunk_content, overlap_token_size, max_token_size
+                        )
+                        chunks.extend(sub_chunks)
+                    else:
+                        chunks.append({
+                            "content": chunk_content,
+                            "tokens": len(chunk_tokens),
+                            "chunk_order_index": len(chunks)
+                        })
+            
+            # Start new chunk with this header
+            current_chunk_lines = [line]
+        else:
+            # Add non-header line to current chunk
+            current_chunk_lines.append(line)
+    
+    # Process the last chunk
+    if current_chunk_lines:
+        chunk_content = '\n'.join(current_chunk_lines).strip()
+        if chunk_content:
+            chunk_tokens = tokenizer.encode(chunk_content)
+            if len(chunk_tokens) > max_token_size:
+                sub_chunks = _chunk_by_tokens_only(
+                    tokenizer, chunk_content, overlap_token_size, max_token_size
+                )
+                chunks.extend(sub_chunks)
+            else:
+                chunks.append({
+                    "content": chunk_content,
+                    "tokens": len(chunk_tokens),
+                    "chunk_order_index": len(chunks)
+                })
+    
+    logger.info(f"Header-based chunking created {len(chunks)} chunks from content with headers")
+    return chunks
+
+
 def chunking_by_token_size(
     tokenizer: Tokenizer,
     content: str,
@@ -85,6 +168,12 @@ def chunking_by_token_size(
 
     tokens = tokenizer.encode(content)
     results: list[dict[str, Any]] = []
+    
+    # First check if we should split by markdown headers
+    if split_by_character is None and ('# ' in content or '## ' in content):
+        logger.debug("Detecting markdown headers - using header-based chunking")
+        return _chunk_by_headers(tokenizer, content, max_token_size, overlap_token_size)
+    
     if split_by_character:
         raw_chunks = content.split(split_by_character)
         new_chunks = []
@@ -128,6 +217,7 @@ def chunking_by_token_size(
         chunk_data = {
             "content": chunk_content,
             "tokens": token_count,
+            "chunk_order_index": len(results),
         }
 
         chunk_validation = DocumentValidator.validate_chunk(chunk_data)
@@ -144,6 +234,7 @@ def chunking_by_token_size(
         chunk_data = {
             "content": content,
             "tokens": len(tokens),
+            "chunk_order_index": 0,
         }
         chunk_validation = DocumentValidator.validate_chunk(chunk_data)
         if chunk_validation.sanitized_data:
@@ -3389,12 +3480,50 @@ async def _find_related_text_unit_from_relationships(
     text_chunks_db: BaseKVStorage,
     knowledge_graph_inst: BaseGraphStorage,
 ):
+    # Log actual source_id values for debugging
+    logger.info(f"Chunk lookup: First few edge_datas keys: {list(edge_datas[0].keys()) if edge_datas else 'No edge_datas'}")
+    if edge_datas:
+        logger.info(f"Chunk lookup: First edge_data sample: {dict(list(edge_datas[0].items())[:5])}")
+    
+    sample_source_ids = [dp["source_id"] for dp in edge_datas[:3] if dp["source_id"] is not None]
+    all_source_ids_raw = [dp["source_id"] for dp in edge_datas]  # Include None values
+    none_count = sum(1 for sid in all_source_ids_raw if sid is None)
+    empty_count = sum(1 for sid in all_source_ids_raw if sid == "")
+    
+    logger.info(f"Chunk lookup: Sample source_ids: {sample_source_ids}")
+    logger.info(f"Chunk lookup: GRAPH_FIELD_SEP is: '{GRAPH_FIELD_SEP}'")
+    logger.info(f"Chunk lookup: {none_count} source_ids are None, {empty_count} are empty strings")
+    
+    # Also log all source_ids to see the pattern
+    all_source_ids = [dp["source_id"] for dp in edge_datas if dp["source_id"] is not None]
+    has_sep_count = sum(1 for sid in all_source_ids if GRAPH_FIELD_SEP in sid)
+    single_chunk_count = sum(1 for sid in all_source_ids if sid and GRAPH_FIELD_SEP not in sid)
+    logger.info(f"Chunk lookup: {has_sep_count} source_ids contain '<SEP>', {single_chunk_count} are single chunks")
+    
     text_units = [
         split_string_by_multi_markers(dp["source_id"], [GRAPH_FIELD_SEP])
         for dp in edge_datas
         if dp["source_id"] is not None
     ]
     all_text_units_lookup = {}
+    
+    # Debug logging
+    logger.info(f"Chunk lookup: Found {len(edge_datas)} edge_datas with source_ids")
+    logger.info(f"Chunk lookup: Extracted {len(text_units)} text_unit lists")
+    total_chunk_ids = sum(len(unit_list) for unit_list in text_units)
+    logger.info(f"Chunk lookup: Total chunk IDs to fetch: {total_chunk_ids}")
+    
+    # Log first few chunk IDs for debugging
+    if text_units:
+        sample_ids = []
+        for unit_list in text_units[:3]:  # First 3 lists
+            sample_ids.extend(unit_list[:2])  # First 2 IDs from each
+        logger.info(f"Chunk lookup: Sample chunk IDs: {sample_ids[:5]}")
+    else:
+        # Log what split_string_by_multi_markers returned
+        if sample_source_ids:
+            test_split = split_string_by_multi_markers(sample_source_ids[0], [GRAPH_FIELD_SEP])
+            logger.info(f"Chunk lookup: Test split of '{sample_source_ids[0]}' with '{GRAPH_FIELD_SEP}' = {test_split}")
 
     async def fetch_chunk_data(c_id, index):
         if c_id not in all_text_units_lookup:
@@ -3405,6 +3534,8 @@ async def _find_related_text_unit_from_relationships(
                     "data": chunk_data,
                     "order": index,
                 }
+            else:
+                logger.debug(f"Chunk {c_id} not found or missing content in text storage")
 
     tasks = []
     for index, unit_list in enumerate(text_units):
@@ -3412,9 +3543,11 @@ async def _find_related_text_unit_from_relationships(
             tasks.append(fetch_chunk_data(c_id, index))
 
     await asyncio.gather(*tasks)
+    
+    logger.info(f"Chunk lookup: Successfully fetched {len(all_text_units_lookup)} valid chunks")
 
     if not all_text_units_lookup:
-        logger.warning("No valid text chunks found")
+        logger.warning("No valid text chunks found - relationships have source_ids but chunks missing from storage")
         return []
 
     all_text_units = [{"id": k, **v} for k, v in all_text_units_lookup.items()]

@@ -765,13 +765,24 @@ def process_combine_contexts(*context_lists):
     seen_content = {}
     combined_data = []
 
+    def make_hashable(obj):
+        """Convert lists and other unhashable types to hashable equivalents"""
+        if isinstance(obj, list):
+            return tuple(make_hashable(item) for item in obj)
+        elif isinstance(obj, dict):
+            return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
+        else:
+            return obj
+
     # Iterate through all input context lists
     for context_list in context_lists:
         if not context_list:  # Skip empty lists
             continue
         for item in context_list:
             content_dict = {k: v for k, v in item.items() if k != "id"}
-            content_key = tuple(sorted(content_dict.items()))
+            # Convert potentially unhashable values to hashable ones
+            hashable_content = {k: make_hashable(v) for k, v in content_dict.items()}
+            content_key = tuple(sorted(hashable_content.items()))
             if content_key not in seen_content:
                 seen_content[content_key] = item
                 combined_data.append(item)
@@ -1684,6 +1695,10 @@ def normalize_extracted_info(name: str, is_entity=False) -> str:
         # remove English queotes in and around chinese
         name = re.sub(r"['\"]+(?=[\u4e00-\u9fa5])", "", name)
         name = re.sub(r"(?<=[\u4e00-\u9fa5])['\"]+", "", name)
+        
+        # Jason-specific identity normalization
+        if name.strip().lower() == "jason cox":
+            name = "Jason"
 
     return name
 

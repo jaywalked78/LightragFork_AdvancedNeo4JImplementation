@@ -192,7 +192,7 @@ class Neo4JStorage(BaseGraphStorage):
         neo4j_password: str = None,
         ssl: bool = False,
         max_retrieval_nodes: int = 50000,
-        use_dynamic_thresholds: bool = True,
+        use_dynamic_thresholds: bool = False,  # Deprecated - weights now managed by chunk-level post-processing
         min_threshold: float = 0.2,
         **kwargs,
     ):

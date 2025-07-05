@@ -30,6 +30,7 @@ from .config import (
 from lightrag.utils import get_env_value
 import sys
 from lightrag import LightRAG, __version__ as core_version
+from lightrag.advanced_lightrag import AdvancedLightRAG
 from lightrag.api import __api_version__
 from lightrag.types import GPTKeywordExtractionFormat
 from lightrag.utils import EmbeddingFunc
@@ -343,7 +344,7 @@ def create_app(args):
 
     # Initialize RAG
     if args.llm_binding in ["lollms", "ollama", "openai"]:
-        rag = LightRAG(
+        rag = AdvancedLightRAG(
             working_dir=args.working_dir,
             llm_model_func=(
                 lollms_model_complete
@@ -384,7 +385,7 @@ def create_app(args):
             addon_params={"language": args.summary_language},
         )
     elif args.llm_binding == "anthropic":
-        rag = LightRAG(
+        rag = AdvancedLightRAG(
             working_dir=args.working_dir,
             llm_model_func=anthropic_model_complete,
             chunk_token_size=int(args.chunk_size),
@@ -410,7 +411,7 @@ def create_app(args):
             addon_params={"language": args.summary_language},
         )
     else:  # azure_openai
-        rag = LightRAG(
+        rag = AdvancedLightRAG(
             working_dir=args.working_dir,
             llm_model_func=azure_openai_model_complete,
             chunk_token_size=int(args.chunk_size),

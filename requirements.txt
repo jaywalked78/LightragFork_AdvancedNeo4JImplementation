@@ -3,6 +3,7 @@ configparser
 future
 fuzzywuzzy
 psutil
+pytz
 
 # Additional Packages for export Functionality
 pandas>=2.0.0
