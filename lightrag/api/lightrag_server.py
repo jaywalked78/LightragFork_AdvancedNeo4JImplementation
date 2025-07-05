@@ -87,10 +87,11 @@ def create_app(args):
         "openai-ollama",
         "azure_openai",
         "anthropic",
+        "gemini",
     ]:
         raise Exception("llm binding not supported")
 
-    if args.embedding_binding not in ["lollms", "ollama", "openai", "azure_openai", "anthropic"]:
+    if args.embedding_binding not in ["lollms", "ollama", "openai", "azure_openai", "anthropic", "gemini"]:
         raise Exception("embedding binding not supported")
 
     # Set default hosts if not provided
@@ -218,6 +219,13 @@ def create_app(args):
             anthropic_complete_if_cache,
             anthropic_embed,
         )
+    if args.llm_binding == "gemini" or args.embedding_binding == "gemini":
+        logger.info("🚀 Loading Gemini integration with new unified Google Gen AI SDK...")
+        from lightrag.llm.gemini import (
+            gemini_complete_if_cache,
+            gemini_embed,
+        )
+        logger.info("✅ Gemini integration loaded successfully")
     if args.llm_binding_host == "openai-ollama" or args.embedding_binding == "ollama":
         from lightrag.llm.openai import openai_complete_if_cache
         from lightrag.llm.ollama import ollama_embed
@@ -298,6 +306,29 @@ def create_app(args):
             full_response += chunk
         return full_response
 
+    async def gemini_model_complete(
+        prompt,
+        system_prompt=None,
+        history_messages=None,
+        keyword_extraction=False,
+        **kwargs,
+    ) -> str:
+        keyword_extraction = kwargs.pop("keyword_extraction", None)
+        if keyword_extraction:
+            kwargs["response_format"] = GPTKeywordExtractionFormat
+        if history_messages is None:
+            history_messages = []
+        kwargs["temperature"] = args.temperature
+        return await gemini_complete_if_cache(
+            args.llm_model,
+            prompt,
+            system_prompt=system_prompt,
+            history_messages=history_messages,
+            base_url=args.llm_binding_host,
+            api_key=args.llm_binding_api_key,
+            **kwargs,
+        )
+
     # Create the embedding function based on binding
     async def get_embedding_func(texts):
         if args.embedding_binding == "lollms":
@@ -326,6 +357,13 @@ def create_app(args):
                 texts,
                 model=args.embedding_model,
                 base_url=args.embedding_binding_host,
+                api_key=args.embedding_binding_api_key,
+            )
+        elif args.embedding_binding == "gemini":
+            print(f"DEBUG: Using gemini_embed with model={args.embedding_model}, base_url={args.embedding_binding_host}")
+            return await gemini_embed(
+                texts,
+                model=args.embedding_model,
                 api_key=args.embedding_binding_api_key,
             )
         else:
@@ -388,6 +426,33 @@ def create_app(args):
         rag = AdvancedLightRAG(
             working_dir=args.working_dir,
             llm_model_func=anthropic_model_complete,
+            chunk_token_size=int(args.chunk_size),
+            chunk_overlap_token_size=int(args.chunk_overlap_size),
+            llm_model_kwargs={
+                "timeout": args.timeout,
+            },
+            llm_model_name=args.llm_model,
+            llm_model_max_async=args.max_async,
+            llm_model_max_token_size=args.max_tokens,
+            embedding_func=embedding_func,
+            kv_storage=args.kv_storage,
+            graph_storage=args.graph_storage,
+            vector_storage=args.vector_storage,
+            doc_status_storage=args.doc_status_storage,
+            vector_db_storage_cls_kwargs={
+                "cosine_better_than_threshold": args.cosine_threshold
+            },
+            enable_llm_cache_for_entity_extract=args.enable_llm_cache_for_extract,
+            enable_llm_cache=args.enable_llm_cache,
+            auto_manage_storages_states=False,
+            max_parallel_insert=args.max_parallel_insert,
+            addon_params={"language": args.summary_language},
+        )
+    elif args.llm_binding == "gemini":
+        logger.info(f"🤖 Initializing LightRAG with Gemini {args.llm_model} (preserving gamified prompts)")
+        rag = AdvancedLightRAG(
+            working_dir=args.working_dir,
+            llm_model_func=gemini_model_complete,
             chunk_token_size=int(args.chunk_size),
             chunk_overlap_token_size=int(args.chunk_overlap_size),
             llm_model_kwargs={

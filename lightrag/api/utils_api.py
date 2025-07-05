@@ -222,13 +222,16 @@ def display_splash_screen(args: argparse.Namespace) -> None:
     ASCIIColors.yellow(f"{args.input_dir}")
 
     # LLM Configuration
-    ASCIIColors.magenta("\n🤖 LLM Configuration:")
+    llm_title = "🤖 LLM Configuration:" if args.llm_binding != "gemini" else "🤖 LLM Configuration (Gemini 2.5 Flash):"
+    ASCIIColors.magenta(f"\n{llm_title}")
     ASCIIColors.white("    ├─ Binding: ", end="")
-    ASCIIColors.yellow(f"{args.llm_binding}")
+    binding_color = ASCIIColors.green if args.llm_binding == "gemini" else ASCIIColors.yellow
+    binding_color(f"{args.llm_binding}")
     ASCIIColors.white("    ├─ Host: ", end="")
     ASCIIColors.yellow(f"{args.llm_binding_host}")
     ASCIIColors.white("    ├─ Model: ", end="")
-    ASCIIColors.yellow(f"{args.llm_model}")
+    model_color = ASCIIColors.green if "gemini" in args.llm_model.lower() else ASCIIColors.yellow
+    model_color(f"{args.llm_model}")
     ASCIIColors.white("    ├─ Temperature: ", end="")
     ASCIIColors.yellow(f"{args.temperature}")
     ASCIIColors.white("    ├─ Max Async for LLM: ", end="")
