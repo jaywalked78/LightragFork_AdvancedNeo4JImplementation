@@ -2514,9 +2514,9 @@ SQL_TEMPLATES = {
         FROM tll_lightrag_doc_chunks
         WHERE $2::varchar[] IS NULL OR full_doc_id = ANY($2::varchar[])
     )
-    SELECT source_id as src_id, target_id as tgt_id, EXTRACT(EPOCH FROM create_time)::BIGINT as created_at
+    SELECT source_id as src_id, target_id as tgt_id, chunk_ids, EXTRACT(EPOCH FROM create_time)::BIGINT as created_at
     FROM (
-        SELECT r.id, r.source_id, r.target_id, r.create_time, 1 - (r.content_vector <=> '[{embedding_string}]'::vector) as distance
+        SELECT r.id, r.source_id, r.target_id, r.chunk_ids, r.create_time, 1 - (r.content_vector <=> '[{embedding_string}]'::vector) as distance
         FROM TLL_LIGHTRAG_VDB_RELATION r
         JOIN relevant_chunks c ON c.chunk_id = ANY(r.chunk_ids)
         WHERE r.workspace=$1

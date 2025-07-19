@@ -52,6 +52,7 @@ from typing import Any, AsyncIterator, Dict, List, Tuple
 from lightrag.operate import (
     _get_node_data,
     _get_edge_data,
+    _get_edge_data_hybrid,
     get_keywords_from_query,
     extract_entities as base_extract_entities,
     compute_args_hash,
@@ -1285,7 +1286,9 @@ async def _build_query_context_with_details(
             text_chunks_db,
             query_param,
         )
-        hl_data = await _get_edge_data_with_details(
+        # Use hybrid-specific edge data function for better chunk retrieval
+        logger.info(f"🔍 Advanced hybrid mode detected: '{query_param.mode}'")
+        hl_data = await _get_edge_data_with_details_hybrid(
             hl_keywords,
             knowledge_graph_inst,
             relationships_vdb,
@@ -1525,6 +1528,107 @@ async def _get_edge_data_with_details(
                 "file_path": c.get("file_path", "unknown_source"),
             }
             for c in text_units_context
+        ]
+
+    return entities_context, relations_context, text_units_context, retrieval_details
+
+
+async def _get_edge_data_with_details_hybrid(
+    keywords: str,
+    knowledge_graph_inst: BaseGraphStorage,
+    relationships_vdb: BaseVectorStorage,
+    text_chunks_db: BaseKVStorage,
+    query_param: QueryParam,
+) -> Tuple[str, str, str, Dict[str, Any]]:
+    """
+    Hybrid-specific version of _get_edge_data_with_details that uses chunk-based relationship retrieval.
+    
+    This fixes the issue where vector storage returns specific chunk_ids but
+    get_edges_batch() returns ALL relationships between entity pairs.
+    """
+    logger.info("🔄 ADVANCED HYBRID MODE: Using chunk-based relationship retrieval")
+    
+    retrieval_details = {
+        "retrieved_entities_initial_count": 0,
+        "retrieved_entities_after_truncation_count": 0,
+        "retrieved_entities_summary": [],
+        "retrieved_relationships_initial_count": 0,
+        "retrieved_relationships_after_truncation_count": 0,
+        "retrieved_relationships_summary": [],
+        "retrieved_chunks_count": 0,
+        "retrieved_chunks_summary": [],
+        "effective_hl_keywords": keywords.split(", ") if keywords else [],
+    }
+
+    # Get relationships from vector DB
+    logger.info(f"Hybrid Query edges: {keywords}, top_k: {query_param.top_k}")
+    results = await relationships_vdb.query(
+        keywords, top_k=query_param.top_k, ids=query_param.ids
+    )
+    retrieval_details["retrieved_relationships_initial_count"] = len(results)
+
+    if not results:
+        return "", "", "", retrieval_details
+
+    # Use hybrid-specific _get_edge_data logic
+    entities_context, relations_context, text_units_context = await _get_edge_data_hybrid(
+        keywords,
+        knowledge_graph_inst,
+        relationships_vdb,
+        text_chunks_db,
+        query_param,
+    )
+
+    # Extract details from contexts
+    if isinstance(entities_context, list):
+        retrieval_details["retrieved_entities_after_truncation_count"] = len(
+            entities_context
+        )
+        retrieval_details["retrieved_entities_summary"] = [
+            {
+                "name": e.get("entity", ""),
+                "type": e.get("type", "UNKNOWN"),
+                "rank": e.get("rank", 0),
+                "description_summary": (
+                    (e.get("description", "")[:50] + "...")
+                    if e.get("description")
+                    else ""
+                ),
+            }
+            for e in entities_context
+        ]
+
+    if isinstance(relations_context, list):
+        retrieval_details["retrieved_relationships_after_truncation_count"] = len(
+            relations_context
+        )
+        retrieval_details["retrieved_relationships_summary"] = [
+            {
+                "source": r.get("entity1", ""),
+                "target": r.get("entity2", ""),
+                "weight": r.get("weight", 0),
+                "description_summary": (
+                    (r.get("description", "")[:50] + "...")
+                    if r.get("description")
+                    else ""
+                ),
+            }
+            for r in relations_context
+        ]
+
+    if isinstance(text_units_context, list):
+        retrieval_details["retrieved_chunks_count"] = len(text_units_context)
+        retrieval_details["retrieved_chunks_summary"] = [
+            {
+                "id": str(i + 1),
+                "content_summary": (
+                    (t.get("content", "")[:50] + "...")
+                    if t.get("content")
+                    else ""
+                ),
+                "file_path": t.get("file_path", "unknown"),
+            }
+            for i, t in enumerate(text_units_context)
         ]
 
     return entities_context, relations_context, text_units_context, retrieval_details

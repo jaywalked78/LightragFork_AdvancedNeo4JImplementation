@@ -2869,6 +2869,7 @@ async def _build_query_context(
     chunks_vdb: BaseVectorStorage = None,  # Add chunks_vdb parameter for mix mode
 ):
     logger.info(f"Process {os.getpid()} building query context...")
+    logger.info(f"🔍 kg_query_context - Query mode: '{query_param.mode}'")
 
     # Handle local and global modes as before
     if query_param.mode == "local":
@@ -2895,13 +2896,27 @@ async def _build_query_context(
             text_chunks_db,
             query_param,
         )
-        hl_data = await _get_edge_data(
-            hl_keywords,
-            knowledge_graph_inst,
-            relationships_vdb,
-            text_chunks_db,
-            query_param,
-        )
+        # Use hybrid-specific edge data function for better chunk retrieval
+        logger.info(f"🔍 Query mode detected: '{query_param.mode}' (type: {type(query_param.mode)})")
+        logger.info(f"🔍 Mode comparison: query_param.mode == 'hybrid' is {query_param.mode == 'hybrid'}")
+        if query_param.mode == "hybrid":
+            logger.info("✅ Using hybrid-specific edge data function")
+            hl_data = await _get_edge_data_hybrid(
+                hl_keywords,
+                knowledge_graph_inst,
+                relationships_vdb,
+                text_chunks_db,
+                query_param,
+            )
+        else:
+            logger.info("Using standard edge data function")
+            hl_data = await _get_edge_data(
+                hl_keywords,
+                knowledge_graph_inst,
+                relationships_vdb,
+                text_chunks_db,
+                query_param,
+            )
 
         (
             ll_entities_context,
@@ -3122,8 +3137,17 @@ async def _find_most_related_text_unit_from_entities(
     text_chunks_db: BaseKVStorage,
     knowledge_graph_inst: BaseGraphStorage,
 ):
+    # Helper function to clean PostgreSQL array format from source_ids
+    def clean_source_id(source_id):
+        """Clean PostgreSQL array format from source_id: {chunk-id} -> chunk-id"""
+        if source_id is None:
+            return None
+        # Remove PostgreSQL array syntax (curly braces)
+        cleaned = str(source_id).strip('{}')
+        return cleaned
+    
     text_units = [
-        split_string_by_multi_markers(dp["source_id"], [GRAPH_FIELD_SEP])
+        split_string_by_multi_markers(clean_source_id(dp["source_id"]), [GRAPH_FIELD_SEP])
         for dp in node_datas
         if dp["source_id"] is not None
     ]
@@ -3151,7 +3175,7 @@ async def _find_most_related_text_unit_from_entities(
 
     # Add null check for node data
     all_one_hop_text_units_lookup = {
-        k: set(split_string_by_multi_markers(v["source_id"], [GRAPH_FIELD_SEP]))
+        k: set(split_string_by_multi_markers(clean_source_id(v["source_id"]), [GRAPH_FIELD_SEP]))
         for k, v in zip(all_one_hop_nodes, all_one_hop_nodes_data)
         if v is not None and "source_id" in v  # Add source_id check
     }
@@ -3295,6 +3319,7 @@ async def _get_edge_data(
     text_chunks_db: BaseKVStorage,
     query_param: QueryParam,
 ):
+    logger.info(f"⚠️  STANDARD _get_edge_data called (not hybrid version)")
     logger.info(
         f"Query edges: {keywords}, top_k: {query_param.top_k}, cosine: {relationships_vdb.cosine_better_than_threshold}"
     )
@@ -3500,8 +3525,17 @@ async def _find_related_text_unit_from_relationships(
     single_chunk_count = sum(1 for sid in all_source_ids if sid and GRAPH_FIELD_SEP not in sid)
     logger.info(f"Chunk lookup: {has_sep_count} source_ids contain '<SEP>', {single_chunk_count} are single chunks")
     
+    # Helper function to clean PostgreSQL array format from source_ids
+    def clean_source_id(source_id):
+        """Clean PostgreSQL array format from source_id: {chunk-id} -> chunk-id"""
+        if source_id is None:
+            return None
+        # Remove PostgreSQL array syntax (curly braces)
+        cleaned = str(source_id).strip('{}')
+        return cleaned
+    
     text_units = [
-        split_string_by_multi_markers(dp["source_id"], [GRAPH_FIELD_SEP])
+        split_string_by_multi_markers(clean_source_id(dp["source_id"]), [GRAPH_FIELD_SEP])
         for dp in edge_datas
         if dp["source_id"] is not None
     ]
@@ -3522,8 +3556,8 @@ async def _find_related_text_unit_from_relationships(
     else:
         # Log what split_string_by_multi_markers returned
         if sample_source_ids:
-            test_split = split_string_by_multi_markers(sample_source_ids[0], [GRAPH_FIELD_SEP])
-            logger.info(f"Chunk lookup: Test split of '{sample_source_ids[0]}' with '{GRAPH_FIELD_SEP}' = {test_split}")
+            test_split = split_string_by_multi_markers(clean_source_id(sample_source_ids[0]), [GRAPH_FIELD_SEP])
+            logger.info(f"Chunk lookup: Test split of '{sample_source_ids[0]}' -> '{clean_source_id(sample_source_ids[0])}' with '{GRAPH_FIELD_SEP}' = {test_split}")
 
     async def fetch_chunk_data(c_id, index):
         if c_id not in all_text_units_lookup:
@@ -3577,6 +3611,281 @@ async def _find_related_text_unit_from_relationships(
     all_text_units: list[TextChunkSchema] = [t["data"] for t in truncated_text_units]
 
     return all_text_units
+
+
+async def get_relationships_by_chunk_ids(
+    chunk_ids: list[str],
+    knowledge_graph_inst: BaseGraphStorage
+) -> dict[str, dict]:
+    """
+    Retrieve relationships from Neo4j based on chunk_ids instead of entity pairs.
+    
+    This function addresses the hybrid query issue where vector storage returns
+    specific chunk_ids but get_edges_batch() returns ALL relationships between
+    entity pairs, causing a mismatch.
+    
+    Args:
+        chunk_ids: List of chunk identifiers from vector storage
+        knowledge_graph_inst: Neo4j storage instance
+        
+    Returns:
+        Dictionary mapping chunk_id to relationship properties
+    """
+    if not chunk_ids:
+        return {}
+        
+    logger.info(f"Chunk-based lookup: Querying {len(chunk_ids)} chunk_ids")
+    
+    # Build the Neo4j query to find relationships by chunk_ids
+    # Handle both single chunk_ids and multi-chunk source_ids separated by <SEP>
+    query = """
+    UNWIND $chunk_ids AS chunk_id
+    MATCH ()-[r]->() 
+    WHERE r.source_id = chunk_id 
+       OR r.source_id CONTAINS (chunk_id + $sep)
+       OR r.source_id CONTAINS ($sep + chunk_id)
+    RETURN chunk_id, 
+           properties(r) AS properties,
+           type(r) AS neo4j_type,
+           r.original_type AS original_type,
+           r.rel_type AS rel_type,
+           startNode(r).entity_name AS src_id,
+           endNode(r).entity_name AS tgt_id
+    """
+    
+    try:
+        # Execute the query
+        if hasattr(knowledge_graph_inst, '_driver') and knowledge_graph_inst._driver:
+            # Direct Neo4j driver access
+            async with knowledge_graph_inst._driver.session() as session:
+                result = await session.run(
+                    query, 
+                    chunk_ids=chunk_ids, 
+                    sep=GRAPH_FIELD_SEP
+                )
+                records = await result.data()
+        else:
+            # Fallback to custom query method if available
+            logger.warning("Using fallback method for Neo4j query")
+            return {}
+            
+        # Process results into the expected format
+        chunk_relationships = {}
+        for record in records:
+            chunk_id = record["chunk_id"]
+            properties = record["properties"]
+            
+            # Ensure all required fields are present
+            relationship_data = {
+                "src_id": record.get("src_id"),
+                "tgt_id": record.get("tgt_id"),
+                "source_id": properties.get("source_id"),
+                "description": properties.get("description", ""),
+                "keywords": properties.get("keywords", ""),
+                "weight": properties.get("weight", 0.0),
+                "original_type": record.get("original_type", properties.get("original_type")),
+                "rel_type": record.get("rel_type", properties.get("rel_type")),
+                **properties  # Include all other properties
+            }
+            
+            # Map the chunk_id to this relationship
+            if chunk_id not in chunk_relationships:
+                chunk_relationships[chunk_id] = relationship_data
+            else:
+                # If multiple relationships for same chunk_id, keep the one with higher weight
+                existing_weight = chunk_relationships[chunk_id].get("weight", 0.0)
+                new_weight = relationship_data.get("weight", 0.0)
+                if new_weight > existing_weight:
+                    chunk_relationships[chunk_id] = relationship_data
+                    
+        logger.info(f"Chunk-based lookup: Found {len(chunk_relationships)} relationships for {len(chunk_ids)} chunk_ids")
+        return chunk_relationships
+        
+    except Exception as e:
+        logger.error(f"Error in chunk-based relationship lookup: {e}")
+        return {}
+
+
+async def _get_edge_data_hybrid(
+    keywords,
+    knowledge_graph_inst: BaseGraphStorage,
+    relationships_vdb: BaseVectorStorage,
+    text_chunks_db: BaseKVStorage,
+    query_param: QueryParam,
+):
+    """
+    Hybrid-specific version of _get_edge_data that uses chunk-based relationship retrieval.
+    
+    This fixes the issue where vector storage returns specific chunk_ids but
+    get_edges_batch() returns ALL relationships between entity pairs.
+    """
+    logger.info("🔄 HYBRID MODE: Using chunk-based relationship retrieval")
+    logger.info(
+        f"Hybrid edge query: {keywords}, top_k: {query_param.top_k}, cosine: {relationships_vdb.cosine_better_than_threshold}"
+    )
+
+    # Step 1: Query vector storage for relationships
+    results = await relationships_vdb.query(
+        keywords, top_k=query_param.top_k, ids=query_param.ids
+    )
+
+    if not len(results):
+        return "", "", ""
+
+    # Step 2: Extract chunk_ids from vector storage results
+    all_chunk_ids = []
+    vector_result_map = {}  # Map chunk_id to vector result
+    
+    logger.info(f"Hybrid edge query: Processing {len(results)} vector storage results")
+    if results:
+        logger.info(f"Hybrid edge query: First result keys: {list(results[0].keys())}")
+        logger.info(f"Hybrid edge query: First result sample: {results[0]}")
+    
+    for r in results:
+        # Get chunk_ids from vector storage result
+        chunk_ids = r.get("chunk_ids", [])
+        if isinstance(chunk_ids, str):
+            # Handle single chunk_id as string
+            chunk_ids = [chunk_ids]
+        elif chunk_ids is None:
+            chunk_ids = []
+            
+        for chunk_id in chunk_ids:
+            # Clean PostgreSQL array format if present
+            clean_chunk_id = str(chunk_id).strip('{}')
+            all_chunk_ids.append(clean_chunk_id)
+            vector_result_map[clean_chunk_id] = r
+
+    logger.info(f"Hybrid edge query: Extracted {len(all_chunk_ids)} chunk_ids from {len(results)} vector results")
+
+    # Step 3: Get relationships from Neo4j using chunk_ids
+    chunk_relationships = await get_relationships_by_chunk_ids(
+        all_chunk_ids, knowledge_graph_inst
+    )
+
+    if not chunk_relationships:
+        logger.warning("No relationships found for chunk_ids in Neo4j")
+        return "", "", ""
+
+    # Step 4: Build edge_datas using the correct relationships
+    edge_datas = []
+    for chunk_id, relationship_data in chunk_relationships.items():
+        # Get the original vector result for additional metadata
+        vector_result = vector_result_map.get(chunk_id, {})
+        
+        # Create edge data with proper structure
+        edge_data = {
+            "src_id": relationship_data["src_id"],
+            "tgt_id": relationship_data["tgt_id"],
+            "source_id": relationship_data["source_id"],
+            "description": relationship_data.get("description", ""),
+            "keywords": relationship_data.get("keywords", ""),
+            "weight": relationship_data.get("weight", 0.0),
+            "original_type": relationship_data.get("original_type"),
+            "rel_type": relationship_data.get("rel_type"),
+            "rank": 0,  # Will be set by edge_degrees_batch
+            "created_at": vector_result.get("created_at", None),
+            "file_path": relationship_data.get("file_path", vector_result.get("file_path", "unknown_source")),
+        }
+        edge_datas.append(edge_data)
+
+    if not edge_datas:
+        logger.warning("No valid edge_datas constructed from chunk relationships")
+        return "", "", ""
+
+    # Step 5: Get edge degrees for ranking
+    edge_pairs_tuples = [(e["src_id"], e["tgt_id"]) for e in edge_datas]
+    edge_degrees_dict = await knowledge_graph_inst.edge_degrees_batch(edge_pairs_tuples)
+    
+    # Update ranks with actual degrees
+    for edge_data in edge_datas:
+        pair = (edge_data["src_id"], edge_data["tgt_id"])
+        edge_data["rank"] = edge_degrees_dict.get(pair, 0)
+
+    # Step 6: Sort and truncate edge_datas
+    tokenizer: Tokenizer = text_chunks_db.global_config.get("tokenizer")
+    edge_datas = sorted(
+        edge_datas, key=lambda x: (x["rank"], x["weight"]), reverse=True
+    )
+    edge_datas = truncate_list_by_token_size(
+        edge_datas,
+        key=lambda x: x["description"] if x["description"] is not None else "",
+        max_token_size=query_param.max_token_for_global_context,
+        tokenizer=tokenizer,
+    )
+
+    # Step 7: Get entities and text units (same as original)
+    use_entities, use_text_units = await asyncio.gather(
+        _find_most_related_entities_from_relationships(
+            edge_datas,
+            query_param,
+            knowledge_graph_inst,
+        ),
+        _find_related_text_unit_from_relationships(
+            edge_datas,
+            query_param,
+            text_chunks_db,
+            knowledge_graph_inst,
+        ),
+    )
+    
+    logger.info(
+        f"Hybrid query uses {len(use_entities)} entities, {len(edge_datas)} relations, {len(use_text_units)} chunks"
+    )
+
+    # Step 8: Build contexts (same as original)
+    relations_context = []
+    for i, e in enumerate(edge_datas):
+        created_at = e.get("created_at", "UNKNOWN")
+        if isinstance(created_at, (int, float)):
+            created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at))
+
+        file_path = e.get("file_path", "unknown_source")
+
+        relations_context.append(
+            {
+                "id": i + 1,
+                "entity1": e["src_id"],
+                "entity2": e["tgt_id"],
+                "description": e["description"],
+                "keywords": e["keywords"],
+                "weight": e["weight"],
+                "rank": e["rank"],
+                "created_at": created_at,
+                "file_path": file_path,
+            }
+        )
+
+    entities_context = []
+    for i, n in enumerate(use_entities):
+        created_at = n.get("created_at", "UNKNOWN")
+        if isinstance(created_at, (int, float)):
+            created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at))
+
+        file_path = n.get("file_path", "unknown_source")
+
+        entities_context.append(
+            {
+                "id": i + 1,
+                "entity": n["entity_name"],
+                "type": n.get("entity_type", "UNKNOWN"),
+                "description": n.get("description", "UNKNOWN"),
+                "rank": n["rank"],
+                "created_at": created_at,
+                "file_path": file_path,
+            }
+        )
+
+    text_units_context = []
+    for i, t in enumerate(use_text_units):
+        text_units_context.append(
+            {
+                "id": i + 1,
+                "content": t["content"],
+                "file_path": t.get("file_path", "unknown"),
+            }
+        )
+    return entities_context, relations_context, text_units_context
 
 
 async def naive_query(

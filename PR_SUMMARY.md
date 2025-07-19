@@ -1710,6 +1710,69 @@ The system already implements optimal parallelization:
 
 This provides users clear understanding of information sources and retrieval methods for each query type.
 
+### **4. Hybrid Query Chunk Retrieval Fix** ✅ **COMPLETED**
+**File**: `lightrag/operate.py`, `lightrag/advanced_operate.py`, `lightrag/kg/postgres_impl.py`
+
+**Problem**: Hybrid queries consistently returned `retrieved_chunks_count: 0` despite having proper relationships and chunks in the database.
+
+**Root Cause**: Entity-pair-based vs Chunk-based mismatch:
+- **PostgreSQL vector storage** returns specific relationships with specific `chunk_ids`
+- **Neo4j's `get_edges_batch()`** returns ALL relationships between entity pairs
+- **Mismatch**: Vector storage intended chunk X, but Neo4j returned relationship Y
+- **Result**: Wrong relationships → source_ids don't match → 0 chunks retrieved
+
+**Solution Implemented**:
+
+#### **New Chunk-Based Retrieval Functions**
+```python
+# New function in lightrag/operate.py
+async def get_relationships_by_chunk_ids(chunk_ids, neo4j_storage):
+    """Get relationships directly by chunk IDs for hybrid queries"""
+    query = """
+    UNWIND $chunk_ids AS chunk_id
+    MATCH ()-[r]->() 
+    WHERE r.source_id = chunk_id 
+       OR r.source_id CONTAINS (chunk_id + $sep)
+       OR r.source_id CONTAINS ($sep + chunk_id)
+    RETURN chunk_id, properties(r) AS properties, 
+           type(r) AS neo4j_type, r.original_type AS original_type
+    """
+```
+
+#### **PostgreSQL Vector Storage Enhancement**
+```sql
+-- BEFORE: Missing chunk_ids
+SELECT source_id as src_id, target_id as tgt_id, create_time
+
+-- AFTER: Include chunk_ids for hybrid mode
+SELECT source_id as src_id, target_id as tgt_id, chunk_ids, create_time
+```
+
+#### **Flow Architecture Change**
+```
+# BEFORE (Broken Flow)
+Vector Storage → Entity Pairs → get_edges_batch() → ALL relationships → Wrong source_ids → 0 chunks
+
+# AFTER (Fixed Flow)  
+Vector Storage → chunk_ids → get_relationships_by_chunk_ids() → EXACT relationships → Correct source_ids → 39 chunks ✅
+```
+
+**Results**:
+- **Before**: `retrieved_chunks_count: 0` ❌
+- **After**: `retrieved_chunks_count: 39` ✅
+- **Performance**: Similar response times maintained
+- **Compatibility**: Local/global/mix modes unaffected
+
+**Key Files Modified**:
+1. **`lightrag/operate.py`** - Added `get_relationships_by_chunk_ids()` and `_get_edge_data_hybrid()`
+2. **`lightrag/advanced_operate.py`** - Added `_get_edge_data_with_details_hybrid()` function
+3. **`lightrag/kg/postgres_impl.py`** - Updated relationships query to include `chunk_ids`
+
+**Monitoring Indicators**:
+- Log: `🔄 ADVANCED HYBRID MODE: Using chunk-based relationship retrieval`
+- Log: `Hybrid query uses X entities, Y relations, Z chunks` (Z > 0)
+- Log: `Chunk lookup: Successfully fetched X valid chunks`
+
 ---
 
 ## 🚧 CURRENT INVESTIGATION: Query Performance & Chunk Retrieval Enhancement (WIP)
