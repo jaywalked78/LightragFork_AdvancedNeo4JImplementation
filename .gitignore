@@ -68,5 +68,10 @@ gui/
 # unit-test files
 test_*
 
+# Debug and handoff files
+debug_*.py
+HANDOFF_*.md
+CLAUDE.md
+
 # Cline files
 memory-bank/
