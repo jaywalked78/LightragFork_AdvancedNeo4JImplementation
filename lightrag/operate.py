@@ -2881,7 +2881,7 @@ async def _build_query_context(
             query_param,
         )
     elif query_param.mode == "global":
-        entities_context, relations_context, text_units_context = await _get_edge_data(
+        entities_context, relations_context, text_units_context = await _get_edge_data_global(
             hl_keywords,
             knowledge_graph_inst,
             relationships_vdb,
@@ -3831,6 +3831,189 @@ async def _get_edge_data_hybrid(
     
     logger.info(
         f"Hybrid query uses {len(use_entities)} entities, {len(edge_datas)} relations, {len(use_text_units)} chunks"
+    )
+
+    # Step 8: Build contexts (same as original)
+    relations_context = []
+    for i, e in enumerate(edge_datas):
+        created_at = e.get("created_at", "UNKNOWN")
+        if isinstance(created_at, (int, float)):
+            created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at))
+
+        file_path = e.get("file_path", "unknown_source")
+
+        relations_context.append(
+            {
+                "id": i + 1,
+                "entity1": e["src_id"],
+                "entity2": e["tgt_id"],
+                "description": e["description"],
+                "keywords": e["keywords"],
+                "weight": e["weight"],
+                "rank": e["rank"],
+                "created_at": created_at,
+                "file_path": file_path,
+            }
+        )
+
+    entities_context = []
+    for i, n in enumerate(use_entities):
+        created_at = n.get("created_at", "UNKNOWN")
+        if isinstance(created_at, (int, float)):
+            created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at))
+
+        file_path = n.get("file_path", "unknown_source")
+
+        entities_context.append(
+            {
+                "id": i + 1,
+                "entity": n["entity_name"],
+                "type": n.get("entity_type", "UNKNOWN"),
+                "description": n.get("description", "UNKNOWN"),
+                "rank": n["rank"],
+                "created_at": created_at,
+                "file_path": file_path,
+            }
+        )
+
+    text_units_context = []
+    for i, t in enumerate(use_text_units):
+        text_units_context.append(
+            {
+                "id": i + 1,
+                "content": t["content"],
+                "file_path": t.get("file_path", "unknown"),
+            }
+        )
+    return entities_context, relations_context, text_units_context
+
+
+async def _get_edge_data_global(
+    keywords,
+    knowledge_graph_inst: BaseGraphStorage,
+    relationships_vdb: BaseVectorStorage,
+    text_chunks_db: BaseKVStorage,
+    query_param: QueryParam,
+):
+    """
+    Global-specific version of _get_edge_data that uses chunk-based relationship retrieval.
+    
+    This applies the same fix as hybrid mode: instead of using get_edges_batch() which
+    returns relationships without proper source_ids, we use chunk_ids from vector storage
+    to get the exact relationships that have chunk content.
+    """
+    logger.info("🔄 GLOBAL MODE: Using chunk-based relationship retrieval")
+    logger.info(
+        f"Global edge query: {keywords}, top_k: {query_param.top_k}, cosine: {relationships_vdb.cosine_better_than_threshold}"
+    )
+
+    # Step 1: Query vector storage for relationships
+    results = await relationships_vdb.query(
+        keywords, top_k=query_param.top_k, ids=query_param.ids
+    )
+
+    if not len(results):
+        return "", "", ""
+
+    # Step 2: Extract chunk_ids from vector storage results
+    all_chunk_ids = []
+    vector_result_map = {}  # Map chunk_id to vector result
+    
+    logger.info(f"Global edge query: Processing {len(results)} vector storage results")
+    if results:
+        logger.info(f"Global edge query: First result keys: {list(results[0].keys())}")
+        logger.info(f"Global edge query: First result sample: {results[0]}")
+    
+    for r in results:
+        # Get chunk_ids from vector storage result
+        chunk_ids = r.get("chunk_ids", [])
+        if isinstance(chunk_ids, str):
+            # Handle single chunk_id as string
+            chunk_ids = [chunk_ids]
+        elif chunk_ids is None:
+            chunk_ids = []
+            
+        for chunk_id in chunk_ids:
+            # Clean PostgreSQL array format if present
+            clean_chunk_id = str(chunk_id).strip('{}')
+            all_chunk_ids.append(clean_chunk_id)
+            vector_result_map[clean_chunk_id] = r
+
+    logger.info(f"Global edge query: Extracted {len(all_chunk_ids)} chunk_ids from {len(results)} vector results")
+
+    # Step 3: Get relationships from Neo4j using chunk_ids
+    chunk_relationships = await get_relationships_by_chunk_ids(
+        all_chunk_ids, knowledge_graph_inst
+    )
+
+    if not chunk_relationships:
+        logger.warning("No relationships found for chunk_ids in Neo4j")
+        return "", "", ""
+
+    # Step 4: Build edge_datas using the correct relationships
+    edge_datas = []
+    for chunk_id, relationship_data in chunk_relationships.items():
+        # Get the original vector result for additional metadata
+        vector_result = vector_result_map.get(chunk_id, {})
+        
+        # Create edge data with proper structure
+        edge_data = {
+            "src_id": relationship_data["src_id"],
+            "tgt_id": relationship_data["tgt_id"],
+            "source_id": relationship_data["source_id"],
+            "description": relationship_data.get("description", ""),
+            "keywords": relationship_data.get("keywords", ""),
+            "weight": relationship_data.get("weight", 0.0),
+            "original_type": relationship_data.get("original_type"),
+            "rel_type": relationship_data.get("rel_type"),
+            "rank": 0,  # Will be set by edge_degrees_batch
+            "created_at": vector_result.get("created_at", None),
+            "file_path": relationship_data.get("file_path", vector_result.get("file_path", "unknown_source")),
+        }
+        edge_datas.append(edge_data)
+
+    if not edge_datas:
+        logger.warning("No valid edge_datas constructed from chunk relationships")
+        return "", "", ""
+
+    # Step 5: Get edge degrees for ranking
+    edge_pairs_tuples = [(e["src_id"], e["tgt_id"]) for e in edge_datas]
+    edge_degrees_dict = await knowledge_graph_inst.edge_degrees_batch(edge_pairs_tuples)
+
+    # Update ranks with actual degrees
+    for edge_data in edge_datas:
+        pair = (edge_data["src_id"], edge_data["tgt_id"])
+        edge_data["rank"] = edge_degrees_dict.get(pair, 0)
+
+    # Step 6: Sort and truncate edge_datas
+    tokenizer: Tokenizer = text_chunks_db.global_config.get("tokenizer")
+    edge_datas = sorted(
+        edge_datas, key=lambda x: (x["rank"], x["weight"]), reverse=True
+    )
+    edge_datas = truncate_list_by_token_size(
+        edge_datas,
+        key=lambda x: x["description"] if x["description"] is not None else "",
+        max_token_size=query_param.max_token_for_global_context,
+        tokenizer=tokenizer,
+    )
+
+    # Step 7: Get entities and text units (same as original)
+    use_entities, use_text_units = await asyncio.gather(
+        _find_most_related_entities_from_relationships(
+            edge_datas,
+            query_param,
+            knowledge_graph_inst,
+        ),
+        _find_related_text_unit_from_relationships(
+            edge_datas,
+            query_param,
+            text_chunks_db,
+            knowledge_graph_inst,
+        ),
+    )
+    
+    logger.info(
+        f"Global query uses {len(use_entities)} entities, {len(edge_datas)} relations, {len(use_text_units)} chunks"
     )
 
     # Step 8: Build contexts (same as original)

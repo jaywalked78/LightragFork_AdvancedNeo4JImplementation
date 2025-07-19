@@ -53,6 +53,7 @@ from lightrag.operate import (
     _get_node_data,
     _get_edge_data,
     _get_edge_data_hybrid,
+    _get_edge_data_global,
     get_keywords_from_query,
     extract_entities as base_extract_entities,
     compute_args_hash,
@@ -1270,7 +1271,7 @@ async def _build_query_context_with_details(
             relations_context,
             text_units_context,
             details,
-        ) = await _get_edge_data_with_details(
+        ) = await _get_edge_data_with_details_global(
             hl_keywords,
             knowledge_graph_inst,
             relationships_vdb,
@@ -1630,6 +1631,112 @@ async def _get_edge_data_with_details_hybrid(
             }
             for i, t in enumerate(text_units_context)
         ]
+
+    return entities_context, relations_context, text_units_context, retrieval_details
+
+
+async def _get_edge_data_with_details_global(
+    keywords: str,
+    knowledge_graph_inst: BaseGraphStorage,
+    relationships_vdb: BaseVectorStorage,
+    text_chunks_db: BaseKVStorage,
+    query_param: QueryParam,
+) -> Tuple[str, str, str, Dict[str, Any]]:
+    """
+    Global-specific version of _get_edge_data_with_details that uses chunk-based relationship retrieval.
+    
+    This applies the same fix as hybrid mode: instead of using get_edges_batch() which
+    returns relationships without proper source_ids, we use chunk_ids from vector storage
+    to get the exact relationships that have chunk content.
+    """
+    logger.info("🔄 ADVANCED GLOBAL MODE: Using chunk-based relationship retrieval")
+    
+    retrieval_details = {
+        "retrieved_entities_initial_count": 0,
+        "retrieved_entities_after_truncation_count": 0,
+        "retrieved_entities_summary": [],
+        "retrieved_relationships_initial_count": 0,
+        "retrieved_relationships_after_truncation_count": 0,
+        "retrieved_relationships_summary": [],
+        "retrieved_chunks_count": 0,
+        "retrieved_chunks_summary": [],
+        "effective_hl_keywords": keywords.split(", ") if keywords else [],
+    }
+
+    # Use the chunk-based global edge data function
+    entities_context, relations_context, text_units_context = await _get_edge_data_global(
+        keywords,
+        knowledge_graph_inst,
+        relationships_vdb,
+        text_chunks_db,
+        query_param,
+    )
+
+    # Parse contexts to extract details
+    if relations_context:
+        try:
+            # relations_context could be a string or list
+            if isinstance(relations_context, str):
+                import json
+                relations_list = json.loads(relations_context)
+            else:
+                relations_list = relations_context
+            
+            retrieval_details["retrieved_relationships_initial_count"] = len(relations_list)
+            retrieval_details["retrieved_relationships_after_truncation_count"] = len(relations_list)
+            retrieval_details["retrieved_relationships_summary"] = [
+                {
+                    "entity1": rel.get("entity1", ""),
+                    "entity2": rel.get("entity2", ""),
+                    "description": rel.get("description", "")[:100] + "..." if len(rel.get("description", "")) > 100 else rel.get("description", ""),
+                    "weight": rel.get("weight", 0.0),
+                }
+                for rel in relations_list[:5]  # First 5 for summary
+            ]
+        except Exception as e:
+            logger.warning(f"Error parsing relations_context for details: {e}")
+
+    if entities_context:
+        try:
+            # entities_context could be a string or list
+            if isinstance(entities_context, str):
+                import json
+                entities_list = json.loads(entities_context)
+            else:
+                entities_list = entities_context
+            
+            retrieval_details["retrieved_entities_initial_count"] = len(entities_list)
+            retrieval_details["retrieved_entities_after_truncation_count"] = len(entities_list)
+            retrieval_details["retrieved_entities_summary"] = [
+                {
+                    "entity": ent.get("entity", ""),
+                    "description": ent.get("description", "")[:100] + "..." if len(ent.get("description", "")) > 100 else ent.get("description", ""),
+                    "weight": ent.get("weight", 0.0),
+                }
+                for ent in entities_list[:5]  # First 5 for summary
+            ]
+        except Exception as e:
+            logger.warning(f"Error parsing entities_context for details: {e}")
+
+    if text_units_context:
+        try:
+            # text_units_context could be a string or list
+            if isinstance(text_units_context, str):
+                import json
+                chunks_list = json.loads(text_units_context)
+            else:
+                chunks_list = text_units_context
+            
+            retrieval_details["retrieved_chunks_count"] = len(chunks_list)
+            retrieval_details["retrieved_chunks_summary"] = [
+                {
+                    "content": chunk.get("content", "")[:100] + "..." if len(chunk.get("content", "")) > 100 else chunk.get("content", ""),
+                    "file_path": chunk.get("file_path", ""),
+                }
+                for chunk in chunks_list[:5]  # First 5 for summary
+            ]
+        except Exception as e:
+            logger.warning(f"Error parsing text_units_context for details: {e}")
 
     return entities_context, relations_context, text_units_context, retrieval_details
 
