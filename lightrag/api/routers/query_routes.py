@@ -4,12 +4,14 @@ This module contains all query-related routes for the LightRAG API.
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from lightrag.base import QueryParam
 from ..utils_api import get_combined_auth_dependency
 from pydantic import BaseModel, Field, field_validator
+from lightrag.api_query_logger import get_api_query_logger
 
 from ascii_colors import trace_exception
 
@@ -144,22 +146,48 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
             HTTPException: Raised when an error occurs during the request handling process,
                        with status code 500 and detail containing the exception message.
         """
+        start_time = time.time()
+        api_logger = await get_api_query_logger()
+        error_message = None
+        response_text = ""
+        
         try:
             param = request.to_query_params(False)
             response = await rag.aquery(request.query, param=param)
 
             # If response is a string (e.g. cache hit), return directly
             if isinstance(response, str):
+                response_text = response
                 return QueryResponse(response=response)
 
             if isinstance(response, dict):
                 result = json.dumps(response, indent=2)
+                response_text = result
                 return QueryResponse(response=result)
             else:
+                response_text = str(response)
                 return QueryResponse(response=str(response))
+                
         except Exception as e:
+            error_message = str(e)
+            response_text = f"Error: {error_message}"
             trace_exception(e)
             raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            # Log the API query and response
+            end_time = time.time()
+            response_time_ms = (end_time - start_time) * 1000
+            
+            await api_logger.log_api_query(
+                query_text=request.query,
+                response_text=response_text,
+                endpoint="/query",
+                query_mode=request.mode,
+                response_time_ms=response_time_ms,
+                error_message=error_message,
+                request_params=request.model_dump(),
+                is_streaming=False,
+            )
 
     @router.post("/query/stream", dependencies=[Depends(combined_auth)])
     async def query_text_stream(request: QueryRequest):
@@ -173,6 +201,11 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
         Returns:
             StreamingResponse: A streaming response containing the RAG query results.
         """
+        start_time = time.time()
+        api_logger = await get_api_query_logger()
+        error_message = None
+        streamed_content = []
+        
         try:
             param = request.to_query_params(True)
             result = await rag.aquery(request.query, param=param)
@@ -186,20 +219,26 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
             from fastapi.responses import StreamingResponse
 
             async def stream_generator():
+                nonlocal error_message, streamed_content
+                
                 if isinstance(response, str):
                     # If it's a string, send it all at once
+                    streamed_content.append(response)
                     yield f"{json.dumps({'response': response})}\n"
                 else:
                     # If it's an async generator, send chunks one by one
                     try:
                         async for chunk in response:
                             if chunk:  # Only send non-empty content
+                                streamed_content.append(chunk)
                                 yield f"{json.dumps({'response': chunk})}\n"
                     except Exception as e:
-                        logging.error(f"Streaming error: {str(e)}")
-                        yield f"{json.dumps({'error': str(e)})}\n"
+                        error_message = str(e)
+                        logging.error(f"Streaming error: {error_message}")
+                        yield f"{json.dumps({'error': error_message})}\n"
 
-            return StreamingResponse(
+            # Create the streaming response
+            streaming_response = StreamingResponse(
                 stream_generator(),
                 media_type="application/x-ndjson",
                 headers={
@@ -209,7 +248,42 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
                     "X-Accel-Buffering": "no",  # Ensure proper handling of streaming response when proxied by Nginx
                 },
             )
+            
+            # Log the streaming query (response will be "[Streaming Response]" since we can't capture streamed content easily)
+            end_time = time.time()
+            response_time_ms = (end_time - start_time) * 1000
+            
+            # For streaming responses, we log immediately but with a placeholder response text
+            await api_logger.log_api_query(
+                query_text=request.query,
+                response_text="[Streaming Response]",
+                endpoint="/query/stream",
+                query_mode=request.mode,
+                response_time_ms=response_time_ms,
+                error_message=error_message,
+                request_params=request.model_dump(),
+                is_streaming=True,
+            )
+            
+            return streaming_response
+            
         except Exception as e:
+            error_message = str(e)
+            end_time = time.time()
+            response_time_ms = (end_time - start_time) * 1000
+            
+            # Log the error
+            await api_logger.log_api_query(
+                query_text=request.query,
+                response_text=f"Error: {error_message}",
+                endpoint="/query/stream",
+                query_mode=request.mode,
+                response_time_ms=response_time_ms,
+                error_message=error_message,
+                request_params=request.model_dump(),
+                is_streaming=True,
+            )
+            
             trace_exception(e)
             raise HTTPException(status_code=500, detail=str(e))
 
