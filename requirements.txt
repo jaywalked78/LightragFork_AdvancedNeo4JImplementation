@@ -22,4 +22,4 @@ tenacity
 
 # LLM packages
 tiktoken
-xlsxwriter>=3.1.0
+xlsxwriter>=3.2.9
