@@ -6,7 +6,7 @@ psutil
 pytz
 
 # Additional Packages for export Functionality
-pandas>=2.0.0
+pandas>=2.3.3
 
 # Extra libraries are installed when needed using pipmaster
 
